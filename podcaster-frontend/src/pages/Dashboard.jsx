@@ -1,10 +1,18 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import PodcastCard from '../components/PodcastCard'
 import '../styles/Dashboard.css'
 
-const API_URL = import.meta.env.VITE_API_URL
+// 🔧 Ustalanie adresu API:
+// - w DEV używamy localhost
+// - w PROD wymagamy VITE_API_URL (np. z Railway)
+const getApiBase = () => {
+  const envUrl = import.meta.env.VITE_API_URL?.trim()
+  if (import.meta.env.DEV) return 'http://localhost:3000'
+  return envUrl || ''
+}
 
 function Dashboard() {
+  const API_BASE = useMemo(getApiBase, [])
   const [activeTab, setActiveTab] = useState('podcasts')
   const [podcasts, setPodcasts] = useState([])
 
@@ -18,10 +26,19 @@ function Dashboard() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
+  // 🔔 Ostrzeżenie w produkcji, jeśli brak VITE_API_URL
+  useEffect(() => {
+    if (!import.meta.env.DEV && !API_BASE) {
+      console.warn('Brak VITE_API_URL w środowisku produkcyjnym – ustaw zmienną na Railway.')
+      setError('Konfiguracja: brak adresu API w produkcji. Ustaw VITE_API_URL na Railway.')
+    }
+  }, [API_BASE])
+
+  // 📥 Pobranie podcastów
   useEffect(() => {
     const fetchPodcasts = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/podcasts`)
+        const res = await fetch(`${API_BASE}/api/podcasts`)
         if (!res.ok) throw new Error('Błąd pobierania danych')
         const data = await res.json()
         setPodcasts(data)
@@ -31,8 +48,8 @@ function Dashboard() {
       }
     }
 
-    fetchPodcasts()
-  }, [])
+    if (API_BASE) fetchPodcasts()
+  }, [API_BASE])
 
   const handleInputChange = (e) => {
     const { name, value, files } = e.target
@@ -54,6 +71,10 @@ function Dashboard() {
       setError('Uzupełnij tytuł i opis podcastu.')
       return
     }
+    if (!API_BASE) {
+      setError('Brak adresu API – sprawdź VITE_API_URL (prod) lub odpal backend lokalnie (dev).')
+      return
+    }
 
     const formData = new FormData()
     formData.append('title', newPodcast.title)
@@ -62,7 +83,7 @@ function Dashboard() {
     if (newPodcast.audioFile) formData.append('audio', newPodcast.audioFile)
 
     try {
-      const res = await fetch(`${API_URL}/api/podcasts`, {
+      const res = await fetch(`${API_BASE}/api/podcasts`, {
         method: 'POST',
         body: formData
       })
@@ -74,6 +95,7 @@ function Dashboard() {
       setNewPodcast({ title: '', description: '', coverFile: null, audioFile: null })
       setSuccess('Podcast dodany!')
     } catch (err) {
+      console.error(err)
       setError('Nie udało się zapisać podcastu.')
     }
   }
