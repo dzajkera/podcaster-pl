@@ -5,7 +5,15 @@ import dotenv from 'dotenv'
 import { v2 as cloudinary } from 'cloudinary'
 import { Readable } from 'stream'
 
+console.log("✅ Backend się uruchamia!");
+
 dotenv.config()
+
+console.log('🔐 ENV CHECK:', {
+    CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME,
+    CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY,
+    CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET ? '✅ Loaded' : '❌ MISSING'
+  })
 
 const app = express()
 const port = process.env.PORT || 3000
