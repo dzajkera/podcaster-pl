@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import PodcastCard from '../components/PodcastCard'
 import '../styles/Dashboard.css'
 
+const API_URL = import.meta.env.VITE_API_URL
+
 function Dashboard() {
   const [activeTab, setActiveTab] = useState('podcasts')
   const [podcasts, setPodcasts] = useState([])
@@ -19,7 +21,7 @@ function Dashboard() {
   useEffect(() => {
     const fetchPodcasts = async () => {
       try {
-        const res = await fetch('http://localhost:3000/api/podcasts')
+        const res = await fetch(`${API_URL}/api/podcasts`)
         if (!res.ok) throw new Error('Błąd pobierania danych')
         const data = await res.json()
         setPodcasts(data)
@@ -60,7 +62,7 @@ function Dashboard() {
     if (newPodcast.audioFile) formData.append('audio', newPodcast.audioFile)
 
     try {
-      const res = await fetch('http://localhost:3000/api/podcasts', {
+      const res = await fetch(`${API_URL}/api/podcasts`, {
         method: 'POST',
         body: formData
       })
