@@ -98,6 +98,22 @@ app.get('/api/podcasts', (req, res) => {
   res.json(podcasts)
 })
 
+// API: Usunięcie podcastu po ID (na razie tylko z pamięci)
+app.delete('/api/podcasts/:id', (req, res) => {
+  const id = Number(req.params.id)
+  const idx = podcasts.findIndex(p => p.id === id)
+
+  if (idx === -1) {
+    return res.status(404).json({ error: 'Nie znaleziono podcastu.' })
+  }
+
+  // 🗑 usuwamy z pseudo-bazy (tablica w pamięci)
+  podcasts.splice(idx, 1)
+
+  // 204 = No Content
+  return res.status(204).end()
+})
+
 app.listen(port, () => {
   console.log(`✅ Serwer działa na http://localhost:${port}`)
 })
