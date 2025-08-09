@@ -10,13 +10,12 @@ dotenv.config()
 const { Pool } = pkg
 
 const app = express()
-// Railway zwykle ustawia PORT — zostawiamy fallback 3000
 const port = process.env.PORT || 3000
 
 app.use(cors())
 app.use(express.json())
 
-// 🔎 Krótkie info diagnostyczne (bez ujawniania sekretów)
+// Krótki log diagnostyczny (bez sekretów)
 console.log('ENV CHECK:', {
   NODE_ENV: process.env.NODE_ENV,
   HAS_DATABASE_URL: !!process.env.DATABASE_URL,
@@ -31,29 +30,39 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 })
 
-// 🔗 Postgres (fallback: DATABASE_URL albo PGHOST/PGUSER/...)
-// Railway dostarcza oba warianty, ale gdyby link nie zadziałał – użyjemy PGHOST...
-const pgBaseConfig = process.env.DATABASE_URL
-  ? { connectionString: process.env.DATABASE_URL }
-  : {
-      host: process.env.PGHOST,
-      port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
-      database: process.env.PGDATABASE,
-      user: process.env.PGUSER,
-      password: process.env.PGPASSWORD,
-    }
+// ===== Postgres: wymagamy zmiennych z Railway, bez localhost =====
+function makePool() {
+  const hasUrl = !!process.env.DATABASE_URL
+  const hasDiscrete =
+    !!process.env.PGHOST &&
+    !!process.env.PGUSER &&
+    !!process.env.PGPASSWORD &&
+    !!process.env.PGDATABASE
 
-// W produkcji (i gdy host nie jest lokalny) włącz SSL
-const needSSL =
-  process.env.NODE_ENV === 'production' ||
-  (pgBaseConfig.host && !['localhost', '127.0.0.1', '::1'].includes(pgBaseConfig.host))
+  if (!hasUrl && !hasDiscrete) {
+    console.error('❌ Brak konfiguracji DB. Ustaw DATABASE_URL albo PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE (Railway → Variables).')
+    process.exit(1)
+  }
 
-const pool = new Pool({
-  ...pgBaseConfig,
-  ssl: needSSL ? { rejectUnauthorized: false } : false,
-})
+  if (hasUrl) {
+    return new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false }, // Railway PG wymaga SSL
+    })
+  }
 
-// ✔️ Init tabeli
+  return new Pool({
+    host: process.env.PGHOST,
+    port: Number(process.env.PGPORT || 5432),
+    user: process.env.PGUSER,
+    password: process.env.PGPASSWORD,
+    database: process.env.PGDATABASE,
+    ssl: { rejectUnauthorized: false },
+  })
+}
+const pool = makePool()
+
+// Init tabeli
 async function initDb() {
   await pool.query(`
     create table if not exists podcasts (
@@ -86,7 +95,7 @@ const uploadToCloudinary = (buffer, folder, resourceType) =>
     Readable.from(buffer).pipe(stream)
   })
 
-// 🧪 prosty endpoint diagnostyczny
+// Diagnostyka
 app.get('/__debug', (req, res) => {
   res.json({
     ok: true,
@@ -131,8 +140,8 @@ app.post(
   }
 )
 
-// GET /api/podcasts — lista (najświeższe na górze)
-app.get('/api/podcasts', async (req, res) => {
+// GET /api/podcasts — lista
+app.get('/api/podcasts', async (_req, res) => {
   try {
     const q = await pool.query(
       `select id, title, description, cover_url as "coverUrl", audio_url as "audioUrl", created_at
@@ -146,7 +155,7 @@ app.get('/api/podcasts', async (req, res) => {
   }
 })
 
-// (opcjonalnie) DELETE /api/podcasts/:id
+// DELETE /api/podcasts/:id
 app.delete('/api/podcasts/:id', async (req, res) => {
   try {
     const del = await pool.query('delete from podcasts where id=$1 returning id', [req.params.id])
