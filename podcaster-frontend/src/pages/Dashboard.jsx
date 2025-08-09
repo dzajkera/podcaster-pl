@@ -5,11 +5,15 @@ import '../styles/Dashboard.css'
 // 🔧 Ustalanie adresu API:
 // - w DEV używamy localhost
 // - w PROD wymagamy VITE_API_URL (np. z Railway)
+// ✅ Najpierw bierzemy VITE_API_URL jeśli jest, w dev i prod.
+//    Jeśli brak – w DEV fallback na localhost, w PROD zostaw pusty (pokaż komunikat).
 const getApiBase = () => {
-  const envUrl = import.meta.env.VITE_API_URL?.trim()
-  if (import.meta.env.DEV) return 'http://localhost:3000'
-  return envUrl || ''
-}
+  const envUrl = import.meta.env.VITE_API_URL?.trim()?.replace(/\/+$/, ''); // bez końcowego /
+  if (envUrl) return envUrl;
+
+  if (import.meta.env.DEV) return 'http://localhost:3000';
+  return ''; // w prod bez URL-a pokażemy komunikat w useEffect
+};
 
 function Dashboard() {
   const API_BASE = useMemo(getApiBase, [])
