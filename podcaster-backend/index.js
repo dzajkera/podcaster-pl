@@ -10,10 +10,19 @@ dotenv.config()
 const { Pool } = pkg
 
 const app = express()
+// Railway zwykle ustawia PORT — zostawiamy fallback 3000
 const port = process.env.PORT || 3000
 
 app.use(cors())
 app.use(express.json())
+
+// 🔎 Krótkie info diagnostyczne (bez ujawniania sekretów)
+console.log('ENV CHECK:', {
+  NODE_ENV: process.env.NODE_ENV,
+  HAS_DATABASE_URL: !!process.env.DATABASE_URL,
+  HAS_PGHOST: !!process.env.PGHOST,
+  PORT: process.env.PORT,
+})
 
 // Cloudinary
 cloudinary.config({
@@ -22,13 +31,29 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET
 })
 
-// Postgres (Railway działa po SSL)
+// 🔗 Postgres (fallback: DATABASE_URL albo PGHOST/PGUSER/...)
+// Railway dostarcza oba warianty, ale gdyby link nie zadziałał – użyjemy PGHOST...
+const pgBaseConfig = process.env.DATABASE_URL
+  ? { connectionString: process.env.DATABASE_URL }
+  : {
+      host: process.env.PGHOST,
+      port: process.env.PGPORT ? Number(process.env.PGPORT) : 5432,
+      database: process.env.PGDATABASE,
+      user: process.env.PGUSER,
+      password: process.env.PGPASSWORD,
+    }
+
+// W produkcji (i gdy host nie jest lokalny) włącz SSL
+const needSSL =
+  process.env.NODE_ENV === 'production' ||
+  (pgBaseConfig.host && !['localhost', '127.0.0.1', '::1'].includes(pgBaseConfig.host))
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  ...pgBaseConfig,
+  ssl: needSSL ? { rejectUnauthorized: false } : false,
 })
 
-// Init tabeli
+// ✔️ Init tabeli
 async function initDb() {
   await pool.query(`
     create table if not exists podcasts (
@@ -56,13 +81,24 @@ const uploadToCloudinary = (buffer, folder, resourceType) =>
   new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       { folder, resource_type: resourceType },
-      (error, result) => error ? reject(error) : resolve(result.secure_url)
+      (error, result) => (error ? reject(error) : resolve(result.secure_url))
     )
     Readable.from(buffer).pipe(stream)
   })
 
+// 🧪 prosty endpoint diagnostyczny
+app.get('/__debug', (req, res) => {
+  res.json({
+    ok: true,
+    NODE_ENV: process.env.NODE_ENV,
+    HAS_DATABASE_URL: !!process.env.DATABASE_URL,
+    HAS_PGHOST: !!process.env.PGHOST,
+  })
+})
+
 // POST /api/podcasts — tworzenie
-app.post('/api/podcasts',
+app.post(
+  '/api/podcasts',
   upload.fields([{ name: 'cover', maxCount: 1 }, { name: 'audio', maxCount: 1 }]),
   async (req, res) => {
     const { title, description } = req.body
