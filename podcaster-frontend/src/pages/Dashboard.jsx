@@ -1,19 +1,14 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import PodcastCard from '../components/PodcastCard'
 import '../styles/Dashboard.css'
 
-// 🔧 Ustalanie adresu API:
-// - w DEV używamy localhost
-// - w PROD wymagamy VITE_API_URL (np. z Railway)
-// ✅ Najpierw bierzemy VITE_API_URL jeśli jest, w dev i prod.
-//    Jeśli brak – w DEV fallback na localhost, w PROD zostaw pusty (pokaż komunikat).
+// ✅ Najpierw bierzemy VITE_API_URL (dev i prod). Jeśli brak – w DEV fallback na localhost.
 const getApiBase = () => {
-  const envUrl = import.meta.env.VITE_API_URL?.trim()?.replace(/\/+$/, ''); // bez końcowego /
-  if (envUrl) return envUrl;
-
-  if (import.meta.env.DEV) return 'http://localhost:3000';
-  return ''; // w prod bez URL-a pokażemy komunikat w useEffect
-};
+  const envUrl = import.meta.env.VITE_API_URL?.trim()?.replace(/\/+$/, '')
+  if (envUrl) return envUrl
+  if (import.meta.env.DEV) return 'http://localhost:3000'
+  return '' // w prod bez URL-a pokażemy komunikat w useEffect
+}
 
 function Dashboard() {
   const API_BASE = useMemo(getApiBase, [])
@@ -98,11 +93,34 @@ function Dashboard() {
       setPodcasts([addedPodcast, ...podcasts])
       setNewPodcast({ title: '', description: '', coverFile: null, audioFile: null })
       setSuccess('Podcast dodany!')
+      setTimeout(() => setSuccess(''), 3000)
     } catch (err) {
       console.error(err)
       setError('Nie udało się zapisać podcastu.')
     }
   }
+
+  // 🗑 Usuń podcast
+  const handleDeletePodcast = useCallback(async (id) => {
+    if (!API_BASE) {
+      setError('Brak adresu API – sprawdź VITE_API_URL.')
+      return
+    }
+    const ok = window.confirm('Na pewno usunąć ten podcast?')
+    if (!ok) return
+
+    try {
+      const res = await fetch(`${API_BASE}/api/podcasts/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Błąd usuwania')
+
+      setPodcasts((prev) => prev.filter((p) => p.id !== id))
+      setSuccess('Podcast usunięty!')
+      setTimeout(() => setSuccess(''), 3000)
+    } catch (err) {
+      console.error(err)
+      setError('Nie udało się usunąć podcastu.')
+    }
+  }, [API_BASE])
 
   return (
     <div className="dashboard-container">
@@ -160,9 +178,28 @@ function Dashboard() {
             {success && <div className="message success">{success}</div>}
 
             <div className="podcast-list">
-              {podcasts.map(p => (
-                <div key={p.id} className="podcast-item">
+              {podcasts.map((p) => (
+                <div key={p.id} className="podcast-item" style={{ position: 'relative' }}>
                   <PodcastCard podcast={p} />
+                  <button
+                    onClick={() => handleDeletePodcast(p.id)}
+                    className="delete-button"
+                    style={{
+                      position: 'absolute',
+                      top: 12,
+                      right: 12,
+                      background: '#ef4444',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 6,
+                      padding: '0.35rem 0.6rem',
+                      cursor: 'pointer',
+                      fontWeight: 600
+                    }}
+                    aria-label={`Usuń podcast ${p.title}`}
+                  >
+                    🗑 Usuń
+                  </button>
                 </div>
               ))}
             </div>
