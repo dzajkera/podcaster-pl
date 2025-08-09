@@ -4,16 +4,10 @@ import multer from 'multer'
 import dotenv from 'dotenv'
 import { v2 as cloudinary } from 'cloudinary'
 import { Readable } from 'stream'
-
-console.log("✅ Backend się uruchamia!");
+import pkg from 'pg'
 
 dotenv.config()
-
-console.log('🔐 ENV CHECK:', {
-    CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME,
-    CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY,
-    CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET ? '✅ Loaded' : '❌ MISSING'
-  })
+const { Pool } = pkg
 
 const app = express()
 const port = process.env.PORT || 3000
@@ -21,97 +15,111 @@ const port = process.env.PORT || 3000
 app.use(cors())
 app.use(express.json())
 
-// Konfiguracja Cloudinary
+// Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET
 })
 
-// Konfiguracja Multer do obsługi uploadu
+// Postgres (Railway działa po SSL)
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+})
+
+// Init tabeli
+async function initDb() {
+  await pool.query(`
+    create table if not exists podcasts (
+      id          bigserial primary key,
+      title       text not null,
+      description text not null,
+      cover_url   text,
+      audio_url   text,
+      created_at  timestamptz not null default now()
+    );
+  `)
+  console.log('✅ DB ready')
+}
+initDb().catch(err => {
+  console.error('DB init error', err)
+  process.exit(1)
+})
+
+// Multer
 const storage = multer.memoryStorage()
 const upload = multer({ storage })
 
-// Pseudo-baza danych (tymczasowo w pamięci)
-const podcasts = []
-
-// Pomocnicza funkcja uploadu do Cloudinary
-const uploadToCloudinary = (buffer, folder, resourceType) => {
-  return new Promise((resolve, reject) => {
+// helper: upload do Cloudinary
+const uploadToCloudinary = (buffer, folder, resourceType) =>
+  new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       { folder, resource_type: resourceType },
-      (error, result) => {
-        if (error) reject(error)
-        else resolve(result.secure_url)
-      }
+      (error, result) => error ? reject(error) : resolve(result.secure_url)
     )
-
     Readable.from(buffer).pipe(stream)
   })
-}
 
-// API: Dodanie podcastu
-app.post('/api/podcasts', upload.fields([
-  { name: 'cover', maxCount: 1 },
-  { name: 'audio', maxCount: 1 }
-]), async (req, res) => {
-  const { title, description } = req.body
+// POST /api/podcasts — tworzenie
+app.post('/api/podcasts',
+  upload.fields([{ name: 'cover', maxCount: 1 }, { name: 'audio', maxCount: 1 }]),
+  async (req, res) => {
+    const { title, description } = req.body
+    if (!title?.trim() || !description?.trim()) {
+      return res.status(400).json({ error: 'Tytuł i opis są wymagane.' })
+    }
 
-  if (!title || !description) {
-    return res.status(400).json({ error: 'Tytuł i opis są wymagane.' })
+    try {
+      const coverFile = req.files?.['cover']?.[0]
+      const audioFile = req.files?.['audio']?.[0]
+
+      let coverUrl = null
+      let audioUrl = null
+
+      if (coverFile) coverUrl = await uploadToCloudinary(coverFile.buffer, 'podcasts/covers', 'image')
+      if (audioFile) audioUrl = await uploadToCloudinary(audioFile.buffer, 'podcasts/audio', 'video') // audio=video
+
+      const insert = await pool.query(
+        `insert into podcasts (title, description, cover_url, audio_url)
+         values ($1,$2,$3,$4)
+         returning id, title, description, cover_url as "coverUrl", audio_url as "audioUrl", created_at`,
+        [title.trim(), description.trim(), coverUrl, audioUrl]
+      )
+
+      res.status(201).json(insert.rows[0])
+    } catch (err) {
+      console.error('Błąd podczas dodawania podcastu:', err)
+      res.status(500).json({ error: 'Wystąpił błąd przy dodawaniu podcastu.' })
+    }
   }
+)
 
+// GET /api/podcasts — lista (najświeższe na górze)
+app.get('/api/podcasts', async (req, res) => {
   try {
-    const coverFile = req.files['cover']?.[0]
-    const audioFile = req.files['audio']?.[0]
-
-    let coverUrl = null
-    let audioUrl = null
-
-    if (coverFile) {
-      coverUrl = await uploadToCloudinary(coverFile.buffer, 'podcasts/covers', 'image')
-    }
-
-    if (audioFile) {
-      audioUrl = await uploadToCloudinary(audioFile.buffer, 'podcasts/audio', 'video') // audio to typ "video" w Cloudinary
-    }
-
-    const newPodcast = {
-      id: Date.now(),
-      title,
-      description,
-      coverUrl,
-      audioUrl
-    }
-
-    podcasts.unshift(newPodcast)
-
-    res.status(201).json(newPodcast)
-  } catch (error) {
-    console.error('Błąd podczas dodawania podcastu:', error)
-    res.status(500).json({ error: 'Wystąpił błąd przy dodawaniu podcastu.' })
+    const q = await pool.query(
+      `select id, title, description, cover_url as "coverUrl", audio_url as "audioUrl", created_at
+       from podcasts
+       order by created_at desc`
+    )
+    res.json(q.rows)
+  } catch (err) {
+    console.error('Błąd pobierania:', err)
+    res.status(500).json({ error: 'Nie udało się pobrać podcastów.' })
   }
 })
 
-// API: Pobranie wszystkich podcastów
-app.get('/api/podcasts', (req, res) => {
-  res.json(podcasts)
-})
-
-// API: Usunięcie podcastu po ID (na razie tylko z pamięci)
-app.delete('/api/podcasts/:id', (req, res) => {
-  const id = Number(req.params.id)
-  const idx = podcasts.findIndex(p => p.id === id)
-
-  if (idx === -1) {
-    return res.status(404).json({ error: 'Nie znaleziono podcastu.' })
+// (opcjonalnie) DELETE /api/podcasts/:id
+app.delete('/api/podcasts/:id', async (req, res) => {
+  try {
+    const del = await pool.query('delete from podcasts where id=$1 returning id', [req.params.id])
+    if (del.rowCount === 0) return res.status(404).json({ error: 'Nie znaleziono podcastu.' })
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('Błąd usuwania:', err)
+    res.status(500).json({ error: 'Nie udało się usunąć podcastu.' })
   }
-
-  // 🗑 usuwamy z pseudo-bazy (tablica w pamięci)
-  podcasts.splice(idx, 1)
-
-  // 204 = No Content
-  return res.status(204).end()
 })
 
 app.listen(port, () => {
