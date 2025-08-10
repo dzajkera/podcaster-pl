@@ -1,7 +1,15 @@
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import logo from '../assets/logo.png'
 
 function Navbar() {
+  const navigate = useNavigate()
+  const token = localStorage.getItem('token')
+
+  const handleLogout = () => {
+    localStorage.removeItem('token')
+    navigate('/') // przekierowanie na stronę główną
+  }
+
   return (
     <nav style={styles.nav}>
       <div style={styles.container}>
@@ -18,9 +26,15 @@ function Navbar() {
           <Link to="/dashboard" style={styles.link}>Dashboard</Link>
         </div>
 
-        {/* Logowanie */}
+        {/* Logowanie/Wylogowanie */}
         <div style={styles.auth}>
-          <Link to="/login" style={styles.loginButton}>Zaloguj się</Link>
+          {!token ? (
+            <Link to="/login" style={styles.loginButton}>Zaloguj się</Link>
+          ) : (
+            <button onClick={handleLogout} style={styles.logoutButton}>
+              Wyloguj
+            </button>
+          )}
         </div>
       </div>
     </nav>
@@ -47,7 +61,7 @@ const styles = {
   links: {
     display: 'flex',
     gap: '1rem',
-    marginLeft: '2rem' // 🔧 tu dodajemy odstęp między logo a linkami
+    marginLeft: '2rem'
   },
   auth: {
     marginLeft: 'auto',
@@ -64,6 +78,15 @@ const styles = {
     padding: '0.5rem 1rem',
     borderRadius: '6px',
     fontWeight: 600,
+  },
+  logoutButton: {
+    backgroundColor: '#ef4444',
+    color: 'white',
+    padding: '0.5rem 1rem',
+    border: 'none',
+    borderRadius: '6px',
+    fontWeight: 600,
+    cursor: 'pointer',
   }
 }
 
