@@ -371,6 +371,27 @@ app.delete('/api/podcasts/:id', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/my-podcasts — tylko moje, wymaga tokenu
+app.get('/api/my-podcasts', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, user_id, title, description,
+              cover_url AS "coverUrl",
+              audio_url AS "audioUrl",
+              created_at
+       FROM podcasts
+       WHERE user_id = $1
+       ORDER BY created_at DESC`,
+      [req.user.uid]
+    )
+    res.json(rows)
+  } catch (err) {
+    console.error('Błąd pobierania moich podcastów:', err)
+    res.status(500).json({ error: 'Nie udało się pobrać Twoich podcastów.' })
+  }
+})
+
 app.listen(port, () => {
   console.log(`✅ Serwer działa na http://localhost:${port}`);
 });
+
