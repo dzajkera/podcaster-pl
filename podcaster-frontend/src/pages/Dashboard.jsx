@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import PodcastCard from '../components/PodcastCard'
 import '../styles/Dashboard.css'
 
@@ -10,10 +11,18 @@ const getApiBase = () => {
   return '' // w prod bez URL-a pokażemy komunikat w useEffect
 }
 
+const getToken = () => localStorage.getItem('token') || ''
+
 function Dashboard() {
   const API_BASE = useMemo(getApiBase, [])
+  const navigate = useNavigate()
+
   const [activeTab, setActiveTab] = useState('podcasts')
   const [podcasts, setPodcasts] = useState([])
+
+  // auth/limity
+  const [me, setMe] = useState(null)            // { id, email, plan, storage_used, created_at, episodes }
+  const [planLimits, setPlanLimits] = useState(null) // { maxEpisodes, maxStorageMB }
 
   const [newPodcast, setNewPodcast] = useState({
     title: '',
@@ -33,7 +42,36 @@ function Dashboard() {
     }
   }, [API_BASE])
 
-  // 📥 Pobranie podcastów
+  // 👤 Pobierz /me (jeśli mamy token)
+  useEffect(() => {
+    if (!API_BASE) return
+    const token = getToken()
+    if (!token) {
+      setMe(null)
+      setPlanLimits(null)
+      return
+    }
+    ;(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/me`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        if (!res.ok) {
+          // token nieprawidłowy/wygaśnięty
+          setMe(null)
+          setPlanLimits(null)
+          return
+        }
+        const data = await res.json()
+        setMe(data.user)
+        setPlanLimits(data.planLimits || null)
+      } catch (e) {
+        console.error('/me error', e)
+      }
+    })()
+  }, [API_BASE])
+
+  // 📥 Pobranie podcastów (publiczne)
   useEffect(() => {
     const fetchPodcasts = async () => {
       try {
@@ -74,6 +112,11 @@ function Dashboard() {
       setError('Brak adresu API – sprawdź VITE_API_URL (prod) lub odpal backend lokalnie (dev).')
       return
     }
+    const token = getToken()
+    if (!token) {
+      setError('Musisz być zalogowany, aby dodać podcast.')
+      return
+    }
 
     const formData = new FormData()
     formData.append('title', newPodcast.title)
@@ -84,19 +127,33 @@ function Dashboard() {
     try {
       const res = await fetch(`${API_BASE}/api/podcasts`, {
         method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
         body: formData
       })
 
-      if (!res.ok) throw new Error('Błąd podczas zapisu')
+      if (!res.ok) {
+        const msg = await res.json().catch(() => ({}))
+        throw new Error(msg?.error || 'Błąd podczas zapisu')
+      }
 
       const addedPodcast = await res.json()
       setPodcasts([addedPodcast, ...podcasts])
       setNewPodcast({ title: '', description: '', coverFile: null, audioFile: null })
       setSuccess('Podcast dodany!')
       setTimeout(() => setSuccess(''), 3000)
+
+      // odśwież /me (liczniki/limity)
+      try {
+        const meRes = await fetch(`${API_BASE}/me`, { headers: { Authorization: `Bearer ${token}` } })
+        if (meRes.ok) {
+          const data = await meRes.json()
+          setMe(data.user)
+          setPlanLimits(data.planLimits || null)
+        }
+      } catch {}
     } catch (err) {
       console.error(err)
-      setError('Nie udało się zapisać podcastu.')
+      setError(err?.message || 'Nie udało się zapisać podcastu.')
     }
   }
 
@@ -106,21 +163,69 @@ function Dashboard() {
       setError('Brak adresu API – sprawdź VITE_API_URL.')
       return
     }
+    const token = getToken()
+    if (!token) {
+      setError('Musisz być zalogowany, aby usuwać podcasty.')
+      return
+    }
     const ok = window.confirm('Na pewno usunąć ten podcast?')
     if (!ok) return
 
     try {
-      const res = await fetch(`${API_BASE}/api/podcasts/${id}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error('Błąd usuwania')
+      const res = await fetch(`${API_BASE}/api/podcasts/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (!res.ok) {
+        const msg = await res.json().catch(() => ({}))
+        throw new Error(msg?.error || 'Błąd usuwania')
+      }
 
       setPodcasts((prev) => prev.filter((p) => p.id !== id))
       setSuccess('Podcast usunięty!')
       setTimeout(() => setSuccess(''), 3000)
+
+      // odśwież /me
+      try {
+        const meRes = await fetch(`${API_BASE}/me`, { headers: { Authorization: `Bearer ${token}` } })
+        if (meRes.ok) {
+          const data = await meRes.json()
+          setMe(data.user)
+          setPlanLimits(data.planLimits || null)
+        }
+      } catch {}
     } catch (err) {
       console.error(err)
-      setError('Nie udało się usunąć podcastu.')
+      setError(err?.message || 'Nie udało się usunąć podcastu.')
     }
   }, [API_BASE])
+
+  const loggedIn = !!me
+  const episodesLimitReached =
+    loggedIn &&
+    planLimits?.maxEpisodes !== null &&
+    typeof me?.episodes === 'number' &&
+    me.episodes >= planLimits.maxEpisodes
+
+  const canSubmit = loggedIn && !episodesLimitReached
+
+  const handleLogout = () => {
+    try {
+      localStorage.removeItem('token')
+      setMe(null)
+      setPlanLimits(null)
+      setSuccess('Wylogowano')
+      setTimeout(() => setSuccess(''), 2000)
+      // przekierowanie do /login (fallback na pełne odświeżenie)
+      try {
+        navigate('/login')
+      } catch {
+        window.location.href = '/login'
+      }
+    } catch {
+      window.location.href = '/login'
+    }
+  }
 
   return (
     <div className="dashboard-container">
@@ -139,6 +244,44 @@ function Dashboard() {
             Transkrypcje
           </button>
         </div>
+
+        {/* Pasek statusu logowania i limitów + wylogowanie */}
+        <div style={{ marginTop: 8, fontSize: 14, opacity: 0.9, display: 'flex', gap: 12, alignItems: 'center' }}>
+          <div style={{ flex: 1 }}>
+            {loggedIn ? (
+              <>
+                Zalogowano jako <strong>{me.email}</strong> (plan: <strong>{me.plan}</strong>)
+                {planLimits && (
+                  <> • odcinki: <strong>{me.episodes}</strong>{planLimits.maxEpisodes !== null ? ` / ${planLimits.maxEpisodes}` : ' / ∞'}
+                  {planLimits.maxStorageMB !== null ? ` • limit storage: ${planLimits.maxStorageMB} MB` : ' • storage: ∞'}</>
+                )}
+                {episodesLimitReached && (
+                  <span style={{ marginLeft: 8, color: '#b91c1c', fontWeight: 600 }}>
+                    Limit odcinków w Twoim planie został osiągnięty.
+                  </span>
+                )}
+              </>
+            ) : (
+              <span>Nie zalogowano — dodawanie/usuwanie wymaga tokenu w <code>localStorage.token</code>.</span>
+            )}
+          </div>
+          {loggedIn && (
+            <button
+              onClick={handleLogout}
+              style={{
+                background: '#334155',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 6,
+                padding: '0.45rem 0.7rem',
+                cursor: 'pointer',
+                fontWeight: 600
+              }}
+            >
+              Wyloguj
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="dashboard-content">
@@ -151,6 +294,7 @@ function Dashboard() {
                 placeholder="Tytuł podcastu"
                 value={newPodcast.title}
                 onChange={handleInputChange}
+                disabled={!canSubmit}
               />
               <input
                 type="text"
@@ -158,20 +302,25 @@ function Dashboard() {
                 placeholder="Opis"
                 value={newPodcast.description}
                 onChange={handleInputChange}
+                disabled={!canSubmit}
               />
               <input
                 type="file"
                 name="coverFile"
                 accept="image/*"
                 onChange={handleInputChange}
+                disabled={!canSubmit}
               />
               <input
                 type="file"
                 name="audioFile"
                 accept="audio/*"
                 onChange={handleInputChange}
+                disabled={!canSubmit}
               />
-              <button type="submit">Dodaj podcast</button>
+              <button type="submit" disabled={!canSubmit}>
+                {episodesLimitReached ? 'Limit odcinków osiągnięty' : 'Dodaj podcast'}
+              </button>
             </form>
 
             {error && <div className="message error">{error}</div>}
@@ -197,6 +346,7 @@ function Dashboard() {
                       fontWeight: 600
                     }}
                     aria-label={`Usuń podcast ${p.title}`}
+                    disabled={!loggedIn}
                   >
                     🗑 Usuń
                   </button>
