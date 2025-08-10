@@ -67,26 +67,26 @@ function Dashboard() {
     })()
   }, [API_BASE])
 
-// 📥 Pobranie odcinków WYŁĄCZNIE moich (wymaga tokenu)
-useEffect(() => {
-  if (!API_BASE) return
-  const token = getToken()
-  if (!token) { setPodcasts([]); return }
+  // 📥 Pobranie odcinków WYŁĄCZNIE moich (wymaga tokenu)
+  useEffect(() => {
+    if (!API_BASE) return
+    const token = getToken()
+    if (!token) { setPodcasts([]); return }
 
-  ;(async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/my-podcasts`, {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-      if (!res.ok) throw new Error('Błąd pobierania danych')
-      const data = await res.json()
-      setPodcasts(data)
-    } catch (err) {
-      console.error('Błąd ładowania podcastów:', err)
-      setError('Nie udało się załadować podcastów.')
-    }
-  })()
-}, [API_BASE, me?.id])
+    ;(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/my-podcasts`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        if (!res.ok) throw new Error('Błąd pobierania danych')
+        const data = await res.json()
+        setPodcasts(data)
+      } catch (err) {
+        console.error('Błąd ładowania podcastów:', err)
+        setError('Nie udało się załadować podcastów.')
+      }
+    })()
+  }, [API_BASE, me?.id])
 
   // formularz
   const handleInputChange = (e) => {
@@ -224,19 +224,16 @@ useEffect(() => {
           </div>
         )}
 
-        <div style={{ marginTop: 8, fontSize: 14, opacity: 0.9 }}>
-          {loggedIn ? (
-            <>
-              Zalogowano jako <strong>{me.email}</strong> (plan: <strong>{me.plan}</strong>)
-              {planLimits && (
-                <> • odcinki: <strong>{me.episodes}</strong>{planLimits.maxEpisodes !== null ? ` / ${planLimits.maxEpisodes}` : ' / ∞'}
-                {planLimits.maxStorageMB !== null ? ` • limit storage: ${planLimits.maxStorageMB} MB` : ' • storage: ∞'}</>
-              )}
-            </>
-          ) : (
-            <span>Nie zalogowano — <Link to="/login">zaloguj się</Link>, aby zarządzać odcinkami.</span>
-          )}
-        </div>
+        {/* ✅ TYLKO dla zalogowanych – żadnych komunikatów na górze dla niezalogowanych */}
+        {loggedIn && (
+          <div style={{ marginTop: 8, fontSize: 14, opacity: 0.9 }}>
+            Zalogowano jako <strong>{me.email}</strong> (plan: <strong>{me.plan}</strong>)
+            {planLimits && (
+              <> • odcinki: <strong>{me.episodes}</strong>{planLimits.maxEpisodes !== null ? ` / ${planLimits.maxEpisodes}` : ' / ∞'}
+              {planLimits.maxStorageMB !== null ? ` • limit storage: ${planLimits.maxStorageMB} MB` : ' • storage: ∞'}</>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="dashboard-content">
