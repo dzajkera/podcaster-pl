@@ -67,26 +67,26 @@ function Dashboard() {
     })()
   }, [API_BASE])
 
-  // Pobieranie odcinków TYLKO dla zalogowanego + filtr po user_id
-  useEffect(() => {
-    if (!API_BASE) return
-    if (!me?.id) {
-      setPodcasts([])
-      return
+// 📥 Pobranie odcinków WYŁĄCZNIE moich (wymaga tokenu)
+useEffect(() => {
+  if (!API_BASE) return
+  const token = getToken()
+  if (!token) { setPodcasts([]); return }
+
+  ;(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/my-podcasts`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (!res.ok) throw new Error('Błąd pobierania danych')
+      const data = await res.json()
+      setPodcasts(data)
+    } catch (err) {
+      console.error('Błąd ładowania podcastów:', err)
+      setError('Nie udało się załadować podcastów.')
     }
-    ;(async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/podcasts`)
-        if (!res.ok) throw new Error('Błąd pobierania danych')
-        const data = await res.json()
-        const mine = data.filter(p => String(p.user_id) === String(me.id))
-        setPodcasts(mine)
-      } catch (err) {
-        console.error('Błąd ładowania podcastów:', err)
-        setError('Nie udało się załadować podcastów.')
-      }
-    })()
-  }, [API_BASE, me?.id])
+  })()
+}, [API_BASE, me?.id])
 
   // formularz
   const handleInputChange = (e) => {
