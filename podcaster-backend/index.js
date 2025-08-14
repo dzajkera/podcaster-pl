@@ -74,7 +74,7 @@ const PLANS = {
 const MB = 1024 * 1024;
 
 // ─────────────────────────────────────────────────────────────
-// Inicjalizacja schematu
+// Inicjalizacja schematu + migracje kolumn public_id
 async function initDb() {
   // Użytkownicy
   await pool.query(`
@@ -88,22 +88,27 @@ async function initDb() {
     );
   `);
 
-  // Odcinki (podcast episodes)
+  // Odcinki
   await pool.query(`
     CREATE TABLE IF NOT EXISTS podcasts (
-      id          BIGSERIAL PRIMARY KEY,
-      user_id     BIGINT REFERENCES users(id) ON DELETE CASCADE,
-      title       TEXT NOT NULL,
-      description TEXT NOT NULL,
-      cover_url   TEXT,
-      audio_url   TEXT,
-      audio_bytes BIGINT DEFAULT 0,               -- zapisujemy rozmiar audio dla bilansu
-      cover_bytes BIGINT DEFAULT 0,               -- zapisujemy rozmiar covera
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      id            BIGSERIAL PRIMARY KEY,
+      user_id       BIGINT REFERENCES users(id) ON DELETE CASCADE,
+      title         TEXT NOT NULL,
+      description   TEXT NOT NULL,
+      cover_url     TEXT,
+      audio_url     TEXT,
+      cover_public_id TEXT,         -- NEW
+      audio_public_id TEXT,         -- NEW
+      audio_bytes   BIGINT DEFAULT 0,
+      cover_bytes   BIGINT DEFAULT 0,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
 
-  // indeksy pomocnicze
+  // defensywnie: jeśli tabela już była, dołóż kolumny jeśli ich brak
+  await pool.query(`ALTER TABLE podcasts ADD COLUMN IF NOT EXISTS cover_public_id TEXT;`);
+  await pool.query(`ALTER TABLE podcasts ADD COLUMN IF NOT EXISTS audio_public_id TEXT;`);
+
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_podcasts_user_id ON podcasts(user_id);`);
 
   console.log('✅ DB ready');
@@ -118,15 +123,38 @@ initDb().catch((err) => {
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// Helper: Cloudinary upload (stream)
+// Helper: Cloudinary upload (stream) → zwraca { url, public_id }
 const uploadToCloudinary = (buffer, folder, resourceType) =>
   new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       { folder, resource_type: resourceType },
-      (error, result) => (error ? reject(error) : resolve(result.secure_url))
+      (error, result) => {
+        if (error) return reject(error);
+        resolve({ url: result.secure_url, public_id: result.public_id });
+      }
     );
     Readable.from(buffer).pipe(stream);
   });
+
+// Fallback parser public_id z URL-a (dla legacy rekordów bez *_public_id)
+function tryExtractPublicIdFromUrl(url) {
+  try {
+    // przykładowy URL:
+    // https://res.cloudinary.com/<cloud>/image/upload/v1699999999/podcaster/users/1/covers/abc123def.jpg
+    const u = new URL(url);
+    const parts = u.pathname.split('/'); // ["", "<cloud>", "image", "upload", "v1699...", "podcaster", "users", "1", "covers", "abc123def.jpg"]
+    const last = parts[parts.length - 1];
+    const noExt = last.replace(/\.[^.]+$/, ''); // abc123def
+    // public_id bez rozszerzenia + poprzedzające foldery od (po "upload/" do nazwy pliku)
+    const uploadIdx = parts.findIndex(p => p === 'upload');
+    const pathParts = parts.slice(uploadIdx + 1); // ["v1699...", "podcaster", "users", "1", "covers", "abc123def.jpg"]
+    const withoutVersion = pathParts.filter(p => !/^v\d+$/.test(p)); // usuń "v123..."
+    const folders = withoutVersion.slice(0, -1); // ["podcaster","users","1","covers"]
+    return (folders.length ? folders.join('/') + '/' : '') + noExt; // "podcaster/users/1/covers/abc123def"
+  } catch {
+    return null;
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 // Auth utils
@@ -267,7 +295,6 @@ app.get('/me', authMiddleware, async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Użytkownik nie istnieje.' });
 
     const user = rows[0];
-    // policz odcinki
     const cnt = await pool.query(`SELECT COUNT(*)::int AS cnt FROM podcasts WHERE user_id=$1`, [uid]);
     user.episodes = cnt.rows[0].cnt;
     res.json({ user, planLimits: PLANS[user.plan] || PLANS.FREE });
@@ -279,7 +306,8 @@ app.get('/me', authMiddleware, async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────
 // PODCASTS (episodes)
-// GET publiczny
+
+// GET publiczny (pozostaje)
 app.get('/api/podcasts', async (_req, res) => {
   try {
     const q = await pool.query(
@@ -291,83 +319,6 @@ app.get('/api/podcasts', async (_req, res) => {
   } catch (err) {
     console.error('Błąd pobierania:', err);
     res.status(500).json({ error: 'Nie udało się pobrać podcastów.' });
-  }
-});
-
-// POST – wymaga zalogowania + quota check
-app.post(
-  '/api/podcasts',
-  authMiddleware,
-  upload.fields([{ name: 'cover', maxCount: 1 }, { name: 'audio', maxCount: 1 }]),
-  checkPlanAndQuotas,
-  async (req, res) => {
-    const { title, description } = req.body;
-    if (!title?.trim() || !description?.trim()) {
-      return res.status(400).json({ error: 'Tytuł i opis są wymagane.' });
-    }
-
-    try {
-      const coverFile = req.files?.['cover']?.[0];
-      const audioFile = req.files?.['audio']?.[0];
-
-      let coverUrl = null;
-      let audioUrl = null;
-      const coverBytes = coverFile?.size || 0;
-      const audioBytes = audioFile?.size || 0;
-
-      // Uploady dopiero po przejściu checkPlanAndQuotas
-      if (coverFile) coverUrl = await uploadToCloudinary(coverFile.buffer, 'podcasts/covers', 'image');
-      if (audioFile) audioUrl = await uploadToCloudinary(audioFile.buffer, 'podcasts/audio', 'video');
-
-      const insert = await pool.query(
-        `INSERT INTO podcasts (user_id, title, description, cover_url, audio_url, cover_bytes, audio_bytes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
-         RETURNING id, user_id, title, description, cover_url AS "coverUrl", audio_url AS "audioUrl", created_at`,
-        [req.user.uid, title.trim(), description.trim(), coverUrl, audioUrl, coverBytes, audioBytes]
-      );
-
-      // zaktualizuj storage_used
-      if (coverBytes + audioBytes > 0) {
-        await pool.query(`UPDATE users SET storage_used = storage_used + $1 WHERE id=$2`, [coverBytes + audioBytes, req.user.uid]);
-      }
-
-      res.status(201).json(insert.rows[0]);
-    } catch (err) {
-      console.error('Błąd podczas dodawania podcastu:', err);
-      res.status(500).json({ error: 'Wystąpił błąd przy dodawaniu podcastu.' });
-    }
-  }
-);
-
-// DELETE – tylko właściciel
-app.delete('/api/podcasts/:id', authMiddleware, async (req, res) => {
-  try {
-    // najpierw pobierz rozmiary, żeby odjąć od storage
-    const sel = await pool.query(
-      `SELECT user_id, (COALESCE(cover_bytes,0) + COALESCE(audio_bytes,0)) AS bytes FROM podcasts WHERE id=$1`,
-      [req.params.id]
-    );
-    if (!sel.rows.length) return res.status(404).json({ error: 'Nie znaleziono podcastu.' });
-    if (sel.rows[0].user_id !== Number(req.user.uid)) {
-      return res.status(403).json({ error: 'Brak uprawnień do usunięcia.' });
-    }
-
-    const bytes = Number(sel.rows[0].bytes) || 0;
-
-    const del = await pool.query('DELETE FROM podcasts WHERE id=$1 AND user_id=$2 RETURNING id', [
-      req.params.id,
-      req.user.uid,
-    ]);
-    if (del.rowCount === 0) return res.status(404).json({ error: 'Nie znaleziono podcastu.' });
-
-    if (bytes > 0) {
-      await pool.query(`UPDATE users SET storage_used = GREATEST(storage_used - $1, 0) WHERE id=$2`, [bytes, req.user.uid]);
-    }
-
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('Błąd usuwania:', err);
-    res.status(500).json({ error: 'Nie udało się usunąć podcastu.' });
   }
 });
 
@@ -390,6 +341,108 @@ app.get('/api/my-podcasts', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Nie udało się pobrać Twoich podcastów.' })
   }
 })
+
+// POST – wymaga zalogowania + quota check
+app.post(
+  '/api/podcasts',
+  authMiddleware,
+  upload.fields([{ name: 'cover', maxCount: 1 }, { name: 'audio', maxCount: 1 }]),
+  checkPlanAndQuotas,
+  async (req, res) => {
+    const { title, description } = req.body;
+    if (!title?.trim() || !description?.trim()) {
+      return res.status(400).json({ error: 'Tytuł i opis są wymagane.' });
+    }
+
+    try {
+      const coverFile = req.files?.['cover']?.[0];
+      const audioFile = req.files?.['audio']?.[0];
+
+      let cover = { url: null, public_id: null };
+      let audio = { url: null, public_id: null };
+
+      const coverBytes = coverFile?.size || 0;
+      const audioBytes = audioFile?.size || 0;
+
+      // Uploady dopiero po przejściu checkPlanAndQuotas → do folderów per user
+      const userFolder = `podcaster/users/${req.user.uid}`;
+      if (coverFile) cover = await uploadToCloudinary(coverFile.buffer, `${userFolder}/covers`, 'image');
+      if (audioFile) audio = await uploadToCloudinary(audioFile.buffer, `${userFolder}/audio`, 'video');
+
+      const insert = await pool.query(
+        `INSERT INTO podcasts (user_id, title, description, cover_url, audio_url, cover_public_id, audio_public_id, cover_bytes, audio_bytes)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         RETURNING id, user_id, title, description, cover_url AS "coverUrl", audio_url AS "audioUrl", created_at`,
+        [req.user.uid, title.trim(), description.trim(), cover.url, audio.url, cover.public_id, audio.public_id, coverBytes, audioBytes]
+      );
+
+      // zaktualizuj storage_used
+      const inc = coverBytes + audioBytes;
+      if (inc > 0) {
+        await pool.query(`UPDATE users SET storage_used = storage_used + $1 WHERE id=$2`, [inc, req.user.uid]);
+      }
+
+      res.status(201).json(insert.rows[0]);
+    } catch (err) {
+      console.error('Błąd podczas dodawania podcastu:', err);
+      res.status(500).json({ error: 'Wystąpił błąd przy dodawaniu podcastu.' });
+    }
+  }
+);
+
+// DELETE – tylko właściciel + sprzątanie Cloudinary
+app.delete('/api/podcasts/:id', authMiddleware, async (req, res) => {
+  try {
+    // pobierz właściciela + public_id i rozmiary
+    const sel = await pool.query(
+      `SELECT user_id,
+              COALESCE(cover_bytes,0) + COALESCE(audio_bytes,0) AS bytes,
+              cover_public_id, audio_public_id,
+              cover_url, audio_url
+       FROM podcasts WHERE id=$1`,
+      [req.params.id]
+    );
+    if (!sel.rows.length) return res.status(404).json({ error: 'Nie znaleziono podcastu.' });
+
+    const row = sel.rows[0];
+    if (row.user_id !== Number(req.user.uid)) {
+      return res.status(403).json({ error: 'Brak uprawnień do usunięcia.' });
+    }
+
+    // sprzątnij pliki z Cloudinary (jeśli mamy public_id; jeśli nie, spróbuj wyciągnąć z URL)
+    const coverPid = row.cover_public_id || (row.cover_url ? tryExtractPublicIdFromUrl(row.cover_url) : null);
+    const audioPid = row.audio_public_id || (row.audio_url ? tryExtractPublicIdFromUrl(row.audio_url) : null);
+
+    try {
+      if (coverPid) await cloudinary.uploader.destroy(coverPid, { resource_type: 'image' });
+    } catch (e) {
+      console.warn('Cloudinary cover destroy warning:', e?.message || e);
+    }
+    try {
+      if (audioPid) await cloudinary.uploader.destroy(audioPid, { resource_type: 'video' });
+    } catch (e) {
+      console.warn('Cloudinary audio destroy warning:', e?.message || e);
+    }
+
+    // usuń rekord
+    const del = await pool.query('DELETE FROM podcasts WHERE id=$1 AND user_id=$2 RETURNING id', [
+      req.params.id,
+      req.user.uid,
+    ]);
+    if (del.rowCount === 0) return res.status(404).json({ error: 'Nie znaleziono podcastu.' });
+
+    // zdejmij storage
+    const bytes = Number(row.bytes) || 0;
+    if (bytes > 0) {
+      await pool.query(`UPDATE users SET storage_used = GREATEST(storage_used - $1, 0) WHERE id=$2`, [bytes, req.user.uid]);
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Błąd usuwania:', err);
+    res.status(500).json({ error: 'Nie udało się usunąć podcastu.' });
+  }
+});
 
 app.listen(port, () => {
   console.log(`✅ Serwer działa na http://localhost:${port}`);
