@@ -16,14 +16,14 @@ function Navbar() {
         {/* Logo */}
         <div style={styles.logo}>
           <Link to="/">
-            <img src={logo} alt="Podcaster.pl logo" style={{ height: '32px' }} />
+            <img src={logo} alt="Podcaster.pl logo" style={{ height: '26px' }} />
           </Link>
         </div>
 
         {/* Linki */}
         <div style={styles.links}>
           <Link to="/" style={styles.link}>Strona główna</Link>
-          <Link to="/dashboard" style={styles.link}>Dashboard</Link>
+          {token && <Link to="/dashboard" style={styles.link}>Dashboard</Link>}
         </div>
 
         {/* Logowanie/Wylogowanie */}
