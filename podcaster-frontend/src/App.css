@@ -38,3 +38,12 @@
 .read-the-docs {
   color: #888;
 }
+
+.btn-primary {
+  background: #3b82f6;
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 8px;
+  text-decoration: none;
+  font-weight: 600;
+}

@@ -1,33 +1,30 @@
-import { useState, useEffect, useCallback } from 'react'
+// src/pages/Dashboard.jsx
+import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import '../styles/Dashboard.css'
+import Alert from '../components/Alert'
 import { API_BASE, apiGet, apiPost, getToken } from '../lib/api'
-
-// MVP: pełny fokus na feeds → episodes. Legacy "podcasts" wycinamy.
 
 function Dashboard() {
   const [activeTab, setActiveTab] = useState('feeds')
 
-  // auth/limity
-  const [me, setMe] = useState(null)                 // { id, email, plan, storage_used, created_at, episodes }
-  const [planLimits, setPlanLimits] = useState(null) // { maxEpisodes, maxStorageMB }
+  // auth/info
+  const [me, setMe] = useState(null)
+  const [planLimits, setPlanLimits] = useState(null)
 
-  // FEEDY
+  // feeds
   const [feeds, setFeeds] = useState([])
   const [activeFeedId, setActiveFeedId] = useState(null)
   const [newFeed, setNewFeed] = useState({ title: '', slug: '', description: '' })
 
-  // EPIZODY
+  // episodes
   const [episodes, setEpisodes] = useState([])
-  const [newEpisode, setNewEpisode] = useState({
-    title: '', description: '', coverFile: null, audioFile: null
-  })
+  const [newEpisode, setNewEpisode] = useState({ title: '', description: '', coverFile: null, audioFile: null })
 
-  // UI
+  // ui
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  // Ostrzeżenie w prod, jeśli brak API_BASE
   useEffect(() => {
     if (!import.meta.env.DEV && !API_BASE) {
       console.warn('Brak VITE_API_URL w produkcji – ustaw zmienną na Railway.')
@@ -35,46 +32,40 @@ function Dashboard() {
     }
   }, [])
 
-  // /me — stan logowania i limity
+  // /me
   useEffect(() => {
     if (!API_BASE) return
     const token = getToken()
-    if (!token) {
-      setMe(null); setPlanLimits(null)
-      return
-    }
+    if (!token) { setMe(null); setPlanLimits(null); return }
     ;(async () => {
       try {
         const data = await apiGet('/me')
         setMe(data.user)
         setPlanLimits(data.planLimits || null)
       } catch {
-        setMe(null); setPlanLimits(null)
+        setMe(null)
+        setPlanLimits(null)
       }
     })()
   }, [])
 
-  // Pobierz feedy użytkownika
+  // feeds
   useEffect(() => {
     if (!API_BASE || !me?.id) return
     ;(async () => {
       try {
         const list = await apiGet('/api/feeds')
-        // backend obecnie zwraca wszystkie feedy; filtrujemy po user_id
         const mine = Array.isArray(list) ? list.filter(f => String(f.user_id) === String(me.id)) : []
         setFeeds(mine)
-        // ustaw aktywny feed jeśli brak
-        if (!activeFeedId && mine.length > 0) {
-          setActiveFeedId(mine[0].id)
-        }
+        if (!activeFeedId && mine.length > 0) setActiveFeedId(mine[0].id)
       } catch (e) {
-        console.error('Błąd /api/feeds', e)
+        console.error(e)
         setFeeds([])
       }
     })()
   }, [me?.id])
 
-  // Pobierz epizody aktywnego feedu
+  // episodes for active feed
   useEffect(() => {
     if (!API_BASE || !me?.id || !activeFeedId) { setEpisodes([]); return }
     ;(async () => {
@@ -82,13 +73,13 @@ function Dashboard() {
         const list = await apiGet(`/api/feeds/${activeFeedId}/episodes`)
         setEpisodes(Array.isArray(list) ? list : [])
       } catch (e) {
-        console.error('Błąd /api/feeds/:id/episodes', e)
+        console.error(e)
         setEpisodes([])
       }
     })()
   }, [me?.id, activeFeedId])
 
-  // Handlery formularzy
+  // handlers
   const handleFeedField = (e) => {
     const { name, value } = e.target
     setNewFeed(prev => ({ ...prev, [name]: value }))
@@ -104,55 +95,45 @@ function Dashboard() {
   const createFeed = async (e) => {
     e.preventDefault()
     setError(''); setSuccess('')
+    if (!newFeed.title.trim()) return setError('Podaj tytuł kanału.')
 
-    if (!newFeed.title.trim()) {
-      setError('Podaj tytuł kanału.')
-      return
-    }
     try {
-      const body = {
+      const created = await apiPost('/api/feeds', {
         title: newFeed.title.trim(),
         slug: newFeed.slug?.trim() || null,
         description: newFeed.description?.trim() || ''
-      }
-      const created = await apiPost('/api/feeds', body, false)
+      })
       setFeeds(prev => [created, ...prev])
       setNewFeed({ title: '', slug: '', description: '' })
       setActiveFeedId(created.id)
       setActiveTab('episodes')
       setSuccess('Kanał utworzony!')
-      setTimeout(() => setSuccess(''), 2500)
+      setTimeout(() => setSuccess(''), 2200)
     } catch (err) {
-      console.error(err)
-      setError(err?.message || 'Nie udało się utworzyć kanału.')
+      setError(err.message)
     }
   }
 
   const addEpisode = async (e) => {
     e.preventDefault()
     setError(''); setSuccess('')
+    if (!activeFeedId) return setError('Wybierz kanał.')
+    if (!newEpisode.title.trim() || !newEpisode.description.trim()) return setError('Podaj tytuł i opis odcinka.')
 
-    if (!activeFeedId) { setError('Wybierz kanał.'); return }
-    if (!newEpisode.title.trim() || !newEpisode.description.trim()) {
-      setError('Podaj tytuł i opis odcinka.')
-      return
-    }
-
-    const formData = new FormData()
-    formData.append('title', newEpisode.title)
-    formData.append('description', newEpisode.description)
-    if (newEpisode.coverFile) formData.append('cover', newEpisode.coverFile)
-    if (newEpisode.audioFile) formData.append('audio', newEpisode.audioFile)
+    const fd = new FormData()
+    fd.append('title', newEpisode.title)
+    fd.append('description', newEpisode.description)
+    if (newEpisode.coverFile) fd.append('cover', newEpisode.coverFile)
+    if (newEpisode.audioFile) fd.append('audio', newEpisode.audioFile)
 
     try {
-      const ep = await apiPost(`/api/feeds/${activeFeedId}/episodes`, formData, true)
+      const ep = await apiPost(`/api/feeds/${activeFeedId}/episodes`, fd, true)
       setEpisodes(prev => [ep, ...prev])
       setNewEpisode({ title: '', description: '', coverFile: null, audioFile: null })
       setSuccess('Odcinek dodany!')
-      setTimeout(() => setSuccess(''), 2500)
+      setTimeout(() => setSuccess(''), 2200)
     } catch (err) {
-      console.error(err)
-      setError(err?.message || 'Nie udało się dodać odcinka.')
+      setError(err.message)
     }
   }
 
@@ -163,21 +144,11 @@ function Dashboard() {
       <div className="dashboard-header">
         {loggedIn && (
           <div className="dashboard-tabs">
-            <button onClick={() => setActiveTab('feeds')} className={activeTab === 'feeds' ? 'active' : ''}>
-              Kanały
-            </button>
-            <button onClick={() => setActiveTab('episodes')} className={activeTab === 'episodes' ? 'active' : ''}>
-              Odcinki
-            </button>
-            <button onClick={() => setActiveTab('stats')} className={activeTab === 'stats' ? 'active' : ''}>
-              Statystyki
-            </button>
-            <button onClick={() => setActiveTab('distribution')} className={activeTab === 'distribution' ? 'active' : ''}>
-              Dystrybucja
-            </button>
-            <button onClick={() => setActiveTab('transcription')} className={activeTab === 'transcription' ? 'active' : ''}>
-              Transkrypcje
-            </button>
+            <button onClick={() => setActiveTab('feeds')} className={activeTab === 'feeds' ? 'active' : ''}>Kanały</button>
+            <button onClick={() => setActiveTab('episodes')} className={activeTab === 'episodes' ? 'active' : ''}>Odcinki</button>
+            <button onClick={() => setActiveTab('stats')} className={activeTab === 'stats' ? 'active' : ''}>Statystyki</button>
+            <button onClick={() => setActiveTab('distribution')} className={activeTab === 'distribution' ? 'active' : ''}>Dystrybucja</button>
+            <button onClick={() => setActiveTab('transcription')} className={activeTab === 'transcription' ? 'active' : ''}>Transkrypcje</button>
           </div>
         )}
 
@@ -186,7 +157,7 @@ function Dashboard() {
             Zalogowano jako <strong>{me.email}</strong> (plan: <strong>{me.plan}</strong>)
             {planLimits && (
               <> • odcinki: <strong>{me.episodes}</strong>{planLimits.maxEpisodes !== null ? ` / ${planLimits.maxEpisodes}` : ' / ∞'}
-              {planLimits.maxStorageMB !== null ? ` • limit storage: ${planLimits.maxStorageMB} MB` : ' • storage: ∞'}</>
+              {planLimits.maxStorageMB !== null ? ` • storage: ${planLimits.maxStorageMB} MB` : ' • storage: ∞'}</>
             )}
           </div>
         )}
@@ -201,10 +172,9 @@ function Dashboard() {
           </div>
         ) : (
           <>
-            {error && <div className="message error">{error}</div>}
-            {success && <div className="message success">{success}</div>}
+            {error && <Alert type="error" style={{ marginBottom: 12 }}>{error}</Alert>}
+            {success && <Alert type="success" style={{ marginBottom: 12 }}>{success}</Alert>}
 
-            {/* ───── KANAŁY ───── */}
             {activeTab === 'feeds' && (
               <div className="grid" style={{ gap: 16 }}>
                 <form onSubmit={createFeed} className="card" style={{ padding: 16 }}>
@@ -218,7 +188,7 @@ function Dashboard() {
                 <div className="card" style={{ padding: 16 }}>
                   <h3 style={{ marginTop: 0 }}>Moje kanały</h3>
                   {feeds.length === 0 ? (
-                    <p>Nie masz jeszcze żadnych kanałów.</p>
+                    <Alert type="info">Nie masz jeszcze żadnych kanałów.</Alert>
                   ) : (
                     <ul style={{ margin: 0, paddingLeft: 16 }}>
                       {feeds.map(f => (
@@ -232,7 +202,9 @@ function Dashboard() {
                               onChange={() => setActiveFeedId(f.id)}
                               style={{ marginRight: 8 }}
                             />
-                            <strong>{f.title || f.name || `Kanał ${f.id}`}</strong>
+                            <Link to={`/feeds/${f.id}`} style={{ textDecoration: 'none' }}>
+                              <strong>{f.title || f.name || `Kanał ${f.id}`}</strong>
+                            </Link>
                             {f.description ? <span> — {f.description}</span> : null}
                           </label>
                         </li>
@@ -243,13 +215,12 @@ function Dashboard() {
               </div>
             )}
 
-            {/* ───── ODCINKI ───── */}
             {activeTab === 'episodes' && (
               <>
                 <div className="card" style={{ padding: 16, marginBottom: 16 }}>
                   <h3 style={{ marginTop: 0 }}>Dodaj odcinek</h3>
                   {feeds.length === 0 ? (
-                    <p>Najpierw utwórz kanał w zakładce <strong>Kanały</strong>.</p>
+                    <Alert type="info">Najpierw utwórz kanał w zakładce <strong>Kanały</strong>.</Alert>
                   ) : (
                     <>
                       <div style={{ marginBottom: 8 }}>
@@ -259,23 +230,12 @@ function Dashboard() {
                             <option key={f.id} value={f.id}>{f.title || f.name || `Kanał ${f.id}`}</option>
                           ))}
                         </select>
+                        &nbsp; <Link to={`/feeds/${activeFeedId || feeds[0]?.id}`}>przejdź do szczegółów</Link>
                       </div>
 
                       <form onSubmit={addEpisode}>
-                        <input
-                          type="text"
-                          name="title"
-                          placeholder="Tytuł odcinka"
-                          value={newEpisode.title}
-                          onChange={handleEpisodeField}
-                        />
-                        <input
-                          type="text"
-                          name="description"
-                          placeholder="Opis"
-                          value={newEpisode.description}
-                          onChange={handleEpisodeField}
-                        />
+                        <input type="text" name="title" placeholder="Tytuł odcinka" value={newEpisode.title} onChange={handleEpisodeField} />
+                        <input type="text" name="description" placeholder="Opis" value={newEpisode.description} onChange={handleEpisodeField} />
                         <input type="file" name="coverFile" accept="image/*" onChange={handleEpisodeField} />
                         <input type="file" name="audioFile" accept="audio/*" onChange={handleEpisodeField} />
                         <button type="submit">Dodaj odcinek</button>
@@ -286,7 +246,7 @@ function Dashboard() {
 
                 <div className="podcast-list">
                   {episodes.map(ep => (
-                    <div key={ep.id} className="podcast-item">
+                    <div key={ep.id} className="podcast-item" style={{ position: 'relative' }}>
                       <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                         {ep.coverUrl ? (
                           <img src={ep.coverUrl} alt="" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8 }} />
@@ -305,9 +265,7 @@ function Dashboard() {
                       </div>
                     </div>
                   ))}
-                  {episodes.length === 0 && (
-                    <p>Brak odcinków w wybranym kanale.</p>
-                  )}
+                  {episodes.length === 0 && <Alert type="info">Brak odcinków w wybranym kanale.</Alert>}
                 </div>
               </>
             )}

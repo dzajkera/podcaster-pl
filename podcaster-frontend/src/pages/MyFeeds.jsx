@@ -1,9 +1,10 @@
+// src/pages/MyFeeds.jsx
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { getApiBase, authHeader } from '../lib/api'
+import Alert from '../components/Alert'
+import { apiGet, apiPost, getToken } from '../lib/api';
 
 function MyFeeds() {
-  const API_BASE = getApiBase()
   const [feeds, setFeeds] = useState([])
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -11,34 +12,28 @@ function MyFeeds() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const navigate = useNavigate()
-  const loggedIn = !!localStorage.getItem('token')
+  const loggedIn = !!getToken()
 
   useEffect(() => {
-    if (!API_BASE || !loggedIn) return
+    if (!loggedIn) return
     ;(async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/my-feeds`, { headers: { ...authHeader() } })
-        if (!res.ok) throw new Error('Błąd pobierania feedów')
-        setFeeds(await res.json())
+        const all = await apiGet('/api/feeds')
+        // pokaż wszystkie moje — backend zwraca globalnie
+        const me = await apiGet('/me')
+        const mine = Array.isArray(all) ? all.filter(f => String(f.user_id) === String(me.user.id)) : []
+        setFeeds(mine)
       } catch (e) { setError(e.message) }
     })()
-  }, [API_BASE, loggedIn])
+  }, [loggedIn])
 
   const handleCreate = async (e) => {
     e.preventDefault()
     setError(''); setSuccess('')
-    if (!title.trim()) { setError('Podaj tytuł'); return }
+    if (!title.trim()) return setError('Podaj tytuł')
+
     try {
-      const res = await fetch(`${API_BASE}/api/feeds`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeader() },
-        body: JSON.stringify({ title, description, slug })
-      })
-      if (!res.ok) {
-        const msg = await res.json().catch(() => ({}))
-        throw new Error(msg?.error || 'Błąd tworzenia feedu')
-      }
-      const feed = await res.json()
+      const feed = await apiPost('/api/feeds', { title, description, slug })
       setSuccess('Feed utworzony')
       setTitle(''); setDescription(''); setSlug('')
       navigate(`/feeds/${feed.id}`)
@@ -48,7 +43,7 @@ function MyFeeds() {
   if (!loggedIn) {
     return (
       <div className="container">
-        <h2>Moje feedy</h2>
+        <h2>Moje kanały</h2>
         <p>Ta sekcja jest dostępna po zalogowaniu.</p>
         <Link to="/login" className="button">Zaloguj się</Link>
       </div>
@@ -57,18 +52,18 @@ function MyFeeds() {
 
   return (
     <div className="container">
-      <h2>Moje feedy</h2>
+      <h2>Moje kanały</h2>
 
       <form onSubmit={handleCreate} style={{ margin: '1rem 0', padding: 12, border: '1px solid #e5e7eb', borderRadius: 8 }}>
-        <h3>➕ Nowy feed</h3>
+        <h3>➕ Nowy kanał</h3>
         <div style={{ display: 'grid', gap: 8, maxWidth: 520 }}>
           <input placeholder="Tytuł *" value={title} onChange={e => setTitle(e.target.value)} />
           <input placeholder="Slug (opcjonalnie)" value={slug} onChange={e => setSlug(e.target.value)} />
           <textarea placeholder="Opis (opcjonalnie)" value={description} onChange={e => setDescription(e.target.value)} />
-          <button type="submit">Utwórz feed</button>
+          <button type="submit">Utwórz kanał</button>
         </div>
-        {error && <div className="message error" style={{ marginTop: 8 }}>{error}</div>}
-        {success && <div className="message success" style={{ marginTop: 8 }}>{success}</div>}
+        {error && <Alert type="error" style={{ marginTop: 8 }}>{error}</Alert>}
+        {success && <Alert type="success" style={{ marginTop: 8 }}>{success}</Alert>}
       </form>
 
       <div style={{ display: 'grid', gap: 12 }}>
@@ -79,7 +74,7 @@ function MyFeeds() {
             {f.description && <div style={{ marginTop: 4, color: '#374151' }}>{f.description}</div>}
           </Link>
         ))}
-        {feeds.length === 0 && <p>Nie masz jeszcze żadnych feedów.</p>}
+        {feeds.length === 0 && <Alert type="info">Nie masz jeszcze żadnych kanałów.</Alert>}
       </div>
     </div>
   )
