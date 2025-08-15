@@ -91,17 +91,17 @@ async function initDb() {
   // Odcinki
   await pool.query(`
     CREATE TABLE IF NOT EXISTS podcasts (
-      id            BIGSERIAL PRIMARY KEY,
-      user_id       BIGINT REFERENCES users(id) ON DELETE CASCADE,
-      title         TEXT NOT NULL,
-      description   TEXT NOT NULL,
-      cover_url     TEXT,
-      audio_url     TEXT,
-      cover_public_id TEXT,         -- NEW
-      audio_public_id TEXT,         -- NEW
-      audio_bytes   BIGINT DEFAULT 0,
-      cover_bytes   BIGINT DEFAULT 0,
-      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+      id              BIGSERIAL PRIMARY KEY,
+      user_id         BIGINT REFERENCES users(id) ON DELETE CASCADE,
+      title           TEXT NOT NULL,
+      description     TEXT NOT NULL,
+      cover_url       TEXT,
+      audio_url       TEXT,
+      cover_public_id TEXT,         -- do sprzątania i podmian
+      audio_public_id TEXT,
+      audio_bytes     BIGINT DEFAULT 0,
+      cover_bytes     BIGINT DEFAULT 0,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
 
@@ -123,11 +123,17 @@ initDb().catch((err) => {
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// Helper: Cloudinary upload (stream) → zwraca { url, public_id }
-const uploadToCloudinary = (buffer, folder, resourceType) =>
+// Helper: Cloudinary upload (stream) z wersjonowaniem po stałym public_id
+const uploadToCloudinary = (buffer, { publicId, resourceType }) =>
   new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
-      { folder, resource_type: resourceType },
+      {
+        folder: undefined,            // używamy pełnego public_id poniżej
+        public_id: publicId,          // STAŁE public_id => Cloudinary nada wersje v1, v2, ...
+        overwrite: true,              // podmiana = nowa wersja
+        unique_filename: false,       // bez losowych sufiksów
+        resource_type: resourceType,  // 'image' | 'video' (audio = video)
+      },
       (error, result) => {
         if (error) return reject(error);
         resolve({ url: result.secure_url, public_id: result.public_id });
@@ -139,18 +145,16 @@ const uploadToCloudinary = (buffer, folder, resourceType) =>
 // Fallback parser public_id z URL-a (dla legacy rekordów bez *_public_id)
 function tryExtractPublicIdFromUrl(url) {
   try {
-    // przykładowy URL:
-    // https://res.cloudinary.com/<cloud>/image/upload/v1699999999/podcaster/users/1/covers/abc123def.jpg
+    // https://res.cloudinary.com/<cloud>/<type>/upload/v169.../podcaster/users/1/episodes/123/cover.jpg
     const u = new URL(url);
-    const parts = u.pathname.split('/'); // ["", "<cloud>", "image", "upload", "v1699...", "podcaster", "users", "1", "covers", "abc123def.jpg"]
-    const last = parts[parts.length - 1];
-    const noExt = last.replace(/\.[^.]+$/, ''); // abc123def
-    // public_id bez rozszerzenia + poprzedzające foldery od (po "upload/" do nazwy pliku)
+    const parts = u.pathname.split('/').filter(Boolean);
     const uploadIdx = parts.findIndex(p => p === 'upload');
-    const pathParts = parts.slice(uploadIdx + 1); // ["v1699...", "podcaster", "users", "1", "covers", "abc123def.jpg"]
-    const withoutVersion = pathParts.filter(p => !/^v\d+$/.test(p)); // usuń "v123..."
-    const folders = withoutVersion.slice(0, -1); // ["podcaster","users","1","covers"]
-    return (folders.length ? folders.join('/') + '/' : '') + noExt; // "podcaster/users/1/covers/abc123def"
+    const pathParts = parts.slice(uploadIdx + 1);
+    const withoutVersion = pathParts.filter(p => !/^v\d+$/.test(p));
+    const last = withoutVersion[withoutVersion.length - 1];
+    const noExt = last.replace(/\.[^.]+$/, '');
+    const folders = withoutVersion.slice(0, -1);
+    return (folders.length ? folders.join('/') + '/' : '') + noExt;
   } catch {
     return null;
   }
@@ -269,7 +273,10 @@ app.post('/auth/login', async (req, res) => {
     if (!email?.trim() || !password?.trim()) {
       return res.status(400).json({ error: 'Email i hasło są wymagane.' });
     }
-    const sel = await pool.query(`SELECT id, email, password_hash, plan, storage_used FROM users WHERE email=$1`, [email.trim().toLowerCase()]);
+    const sel = await pool.query(
+      `SELECT id, email, password_hash, plan, storage_used FROM users WHERE email=$1`,
+      [email.trim().toLowerCase()]
+    );
     if (sel.rows.length === 0) return res.status(401).json({ error: 'Nieprawidłowe dane logowania.' });
 
     const user = sel.rows[0];
@@ -334,15 +341,15 @@ app.get('/api/my-podcasts', authMiddleware, async (req, res) => {
        WHERE user_id = $1
        ORDER BY created_at DESC`,
       [req.user.uid]
-    )
-    res.json(rows)
+    );
+    res.json(rows);
   } catch (err) {
-    console.error('Błąd pobierania moich podcastów:', err)
-    res.status(500).json({ error: 'Nie udało się pobrać Twoich podcastów.' })
+    console.error('Błąd pobierania moich podcastów:', err);
+    res.status(500).json({ error: 'Nie udało się pobrać Twoich podcastów.' });
   }
-})
+});
 
-// POST – wymaga zalogowania + quota check
+// POST – wymaga zalogowania + quota check (wersjonowane uploady do folderu per episode)
 app.post(
   '/api/podcasts',
   authMiddleware,
@@ -354,38 +361,78 @@ app.post(
       return res.status(400).json({ error: 'Tytuł i opis są wymagane.' });
     }
 
+    const client = await pool.connect();
     try {
-      const coverFile = req.files?.['cover']?.[0];
-      const audioFile = req.files?.['audio']?.[0];
-
-      let cover = { url: null, public_id: null };
-      let audio = { url: null, public_id: null };
+      const { uid } = req.user;
+      const coverFile = req.files?.['cover']?.[0] || null;
+      const audioFile = req.files?.['audio']?.[0] || null;
 
       const coverBytes = coverFile?.size || 0;
       const audioBytes = audioFile?.size || 0;
 
-      // Uploady dopiero po przejściu checkPlanAndQuotas → do folderów per user
-      const userFolder = `podcaster/users/${req.user.uid}`;
-      if (coverFile) cover = await uploadToCloudinary(coverFile.buffer, `${userFolder}/covers`, 'image');
-      if (audioFile) audio = await uploadToCloudinary(audioFile.buffer, `${userFolder}/audio`, 'video');
-
-      const insert = await pool.query(
+      // 1) Transakcja — najpierw utwórz rekord, aby uzyskać episodeId
+      await client.query('BEGIN');
+      const ins = await client.query(
         `INSERT INTO podcasts (user_id, title, description, cover_url, audio_url, cover_public_id, audio_public_id, cover_bytes, audio_bytes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-         RETURNING id, user_id, title, description, cover_url AS "coverUrl", audio_url AS "audioUrl", created_at`,
-        [req.user.uid, title.trim(), description.trim(), cover.url, audio.url, cover.public_id, audio.public_id, coverBytes, audioBytes]
+         VALUES ($1,$2,$3,NULL,NULL,NULL,NULL,$4,$5)
+         RETURNING id`,
+        [uid, title.trim(), description.trim(), coverBytes, audioBytes]
       );
+      const episodeId = ins.rows[0].id;
 
-      // zaktualizuj storage_used
-      const inc = coverBytes + audioBytes;
-      if (inc > 0) {
-        await pool.query(`UPDATE users SET storage_used = storage_used + $1 WHERE id=$2`, [inc, req.user.uid]);
+      // 2) Uploady do STAŁYCH public_id => Cloudinary robi wersje (v1,v2,…)
+      let cover = { url: null, public_id: null };
+      let audio = { url: null, public_id: null };
+
+      if (coverFile) {
+        cover = await uploadToCloudinary(coverFile.buffer, {
+          publicId: `podcaster/users/${uid}/episodes/${episodeId}/cover`,
+          resourceType: 'image',
+        });
+      }
+      if (audioFile) {
+        audio = await uploadToCloudinary(audioFile.buffer, {
+          publicId: `podcaster/users/${uid}/episodes/${episodeId}/audio`,
+          resourceType: 'video', // audio = video w Cloudinary
+        });
       }
 
-      res.status(201).json(insert.rows[0]);
+      // 3) Uzupełnij rekord URL + public_id
+      await client.query(
+        `UPDATE podcasts
+            SET cover_url = COALESCE($1, cover_url),
+                audio_url = COALESCE($2, audio_url),
+                cover_public_id = COALESCE($3, cover_public_id),
+                audio_public_id = COALESCE($4, audio_public_id)
+          WHERE id = $5`,
+        [cover.url, audio.url, cover.public_id, audio.public_id, episodeId]
+      );
+
+      // 4) Zwiększ storage_used
+      const inc = coverBytes + audioBytes;
+      if (inc > 0) {
+        await client.query(`UPDATE users SET storage_used = storage_used + $1 WHERE id=$2`, [inc, uid]);
+      }
+
+      await client.query('COMMIT');
+
+      // Zwróć świeży rekord
+      const out = await pool.query(
+        `SELECT id, user_id, title, description,
+                cover_url AS "coverUrl",
+                audio_url AS "audioUrl",
+                created_at
+           FROM podcasts
+          WHERE id = $1`,
+        [episodeId]
+      );
+      res.status(201).json(out.rows[0]);
     } catch (err) {
-      console.error('Błąd podczas dodawania podcastu:', err);
+      await client.query('ROLLBACK');
+      console.error('Błąd podczas dodawania podcastu (tx):', err);
       res.status(500).json({ error: 'Wystąpił błąd przy dodawaniu podcastu.' });
+    } finally {
+      client.release();
     }
   }
 );
