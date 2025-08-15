@@ -192,7 +192,11 @@ function Dashboard() {
                   ) : (
                     <ul style={{ margin: 0, paddingLeft: 16 }}>
                       {feeds.map(f => (
-                        <li key={f.id} style={{ marginBottom: 6 }}>
+                        <li
+                          key={f.id}
+                          style={{ marginBottom: 6 }}
+                          className={String(activeFeedId) === String(f.id) ? 'active-feed' : ''}
+                        >
                           <label style={{ cursor: 'pointer' }}>
                             <input
                               type="radio"

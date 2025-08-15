@@ -89,6 +89,15 @@ function FeedDetail() {
         {episodes.map(ep => (
           <div key={ep.id} className="podcast-item" style={{ position: 'relative' }}>
             <PodcastCard podcast={ep} />
+            {ep.audioUrl && (
+              <audio
+                className="podcast-player"
+                controls
+                style={{ marginTop: 6, width: '100%' }}
+              >
+                <source src={ep.audioUrl} />
+              </audio>
+            )}
           </div>
         ))}
         {episodes.length === 0 && <Alert type="info">Brak odcinków w tym kanale.</Alert>}
@@ -96,4 +105,5 @@ function FeedDetail() {
     </div>
   )
 }
+
 export default FeedDetail
