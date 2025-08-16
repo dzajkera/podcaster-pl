@@ -1,9 +1,9 @@
-// src/pages/Dashboard.jsx
+
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import '../styles/Dashboard.css'
 import Alert from '../components/Alert'
-import { API_BASE, apiGet, apiPost, getToken } from '../lib/api'
+import { API_BASE, apiGet, apiPost, apiDelete, getToken } from '../lib/api'
 
 function Dashboard() {
   const [activeTab, setActiveTab] = useState('feeds')
@@ -79,6 +79,10 @@ function Dashboard() {
     })()
   }, [me?.id, activeFeedId])
 
+  // --- limity (UX) ---
+  const atMaxFeeds = !!(planLimits && planLimits.maxFeeds !== null && feeds.length >= planLimits.maxFeeds)
+  const atMaxEpisodes = !!(planLimits && planLimits.maxEpisodesPerFeed !== null && episodes.length >= planLimits.maxEpisodesPerFeed)
+
   // handlers
   const handleFeedField = (e) => {
     const { name, value } = e.target
@@ -96,6 +100,7 @@ function Dashboard() {
     e.preventDefault()
     setError(''); setSuccess('')
     if (!newFeed.title.trim()) return setError('Podaj tytuł kanału.')
+    if (atMaxFeeds) return setError(`Osiągnięto limit kanałów (${planLimits.maxFeeds}).`)
 
     try {
       const created = await apiPost('/api/feeds', {
@@ -114,11 +119,32 @@ function Dashboard() {
     }
   }
 
+  const deleteFeed = async (feedId) => {
+    setError(''); setSuccess('')
+    const feed = feeds.find(f => String(f.id) === String(feedId))
+    const ok = window.confirm(`Usunąć kanał "${feed?.title || feedId}" wraz ze wszystkimi odcinkami? Tej operacji nie można cofnąć.`)
+    if (!ok) return
+    try {
+      await apiDelete(`/api/feeds/${feedId}`)
+      setFeeds(prev => prev.filter(f => String(f.id) !== String(feedId)))
+      if (String(activeFeedId) === String(feedId)) {
+        const next = feeds.find(f => String(f.id) !== String(feedId))
+        setActiveFeedId(next?.id || null)
+        setEpisodes([]) // czyścimy listę odcinków dla usuniętego feedu
+      }
+      setSuccess('Kanał usunięty.')
+      setTimeout(() => setSuccess(''), 1800)
+    } catch (err) {
+      setError(err.message || 'Nie udało się usunąć kanału.')
+    }
+  }
+
   const addEpisode = async (e) => {
     e.preventDefault()
     setError(''); setSuccess('')
     if (!activeFeedId) return setError('Wybierz kanał.')
     if (!newEpisode.title.trim() || !newEpisode.description.trim()) return setError('Podaj tytuł i opis odcinka.')
+    if (atMaxEpisodes) return setError(`Osiągnięto limit odcinków w kanale (${planLimits.maxEpisodesPerFeed}).`)
 
     const fd = new FormData()
     fd.append('title', newEpisode.title)
@@ -134,6 +160,21 @@ function Dashboard() {
       setTimeout(() => setSuccess(''), 2200)
     } catch (err) {
       setError(err.message)
+    }
+  }
+
+  const deleteEpisode = async (episodeId) => {
+    setError(''); setSuccess('')
+    const ep = episodes.find(e => String(e.id) === String(episodeId))
+    const ok = window.confirm(`Usunąć odcinek "${ep?.title || episodeId}"?`)
+    if (!ok) return
+    try {
+      await apiDelete(`/api/episodes/${episodeId}`)
+      setEpisodes(prev => prev.filter(e => String(e.id) !== String(episodeId)))
+      setSuccess('Odcinek usunięty.')
+      setTimeout(() => setSuccess(''), 1800)
+    } catch (err) {
+      setError(err.message || 'Nie udało się usunąć odcinka.')
     }
   }
 
@@ -156,7 +197,9 @@ function Dashboard() {
           <div style={{ marginTop: 8, fontSize: 14, opacity: 0.9 }}>
             Zalogowano jako <strong>{me.email}</strong> (plan: <strong>{me.plan}</strong>)
             {planLimits && (
-              <> • odcinki: <strong>{me.episodes}</strong>{planLimits.maxEpisodes !== null ? ` / ${planLimits.maxEpisodes}` : ' / ∞'}
+              <> • odcinki: <strong>{me.episodes}</strong>
+              {planLimits.maxEpisodesPerFeed !== null ? ` / ${planLimits.maxEpisodesPerFeed} / feed` : ' / ∞ / feed'}
+              {planLimits.maxFeeds !== null ? ` • kanały: max ${planLimits.maxFeeds}` : ' • kanały: ∞'}
               {planLimits.maxStorageMB !== null ? ` • storage: ${planLimits.maxStorageMB} MB` : ' • storage: ∞'}</>
             )}
           </div>
@@ -175,6 +218,7 @@ function Dashboard() {
             {error && <Alert type="error" style={{ marginBottom: 12 }}>{error}</Alert>}
             {success && <Alert type="success" style={{ marginBottom: 12 }}>{success}</Alert>}
 
+            {/* ───── KANAŁY ───── */}
             {activeTab === 'feeds' && (
               <div className="grid" style={{ gap: 16 }}>
                 <form onSubmit={createFeed} className="card" style={{ padding: 16 }}>
@@ -182,7 +226,12 @@ function Dashboard() {
                   <input name="title" placeholder="Tytuł *" value={newFeed.title} onChange={handleFeedField} />
                   <input name="slug" placeholder="Slug (opcjonalnie)" value={newFeed.slug} onChange={handleFeedField} />
                   <input name="description" placeholder="Opis (opcjonalnie)" value={newFeed.description} onChange={handleFeedField} />
-                  <button type="submit">Utwórz kanał</button>
+                  <button type="submit" disabled={atMaxFeeds} title={atMaxFeeds ? 'Limit kanałów w planie wyczerpany' : ''}>
+                    {atMaxFeeds ? 'Limit kanałów osiągnięty' : 'Utwórz kanał'}
+                  </button>
+                  {atMaxFeeds && (
+                    <div style={{ marginTop: 8 }}><Alert type="info">Osiągnięto limit kanałów w Twoim planie.</Alert></div>
+                  )}
                 </form>
 
                 <div className="card" style={{ padding: 16 }}>
@@ -194,10 +243,10 @@ function Dashboard() {
                       {feeds.map(f => (
                         <li
                           key={f.id}
-                          style={{ marginBottom: 6 }}
+                          style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}
                           className={String(activeFeedId) === String(f.id) ? 'active-feed' : ''}
                         >
-                          <label style={{ cursor: 'pointer' }}>
+                          <label style={{ cursor: 'pointer', flex: 1 }}>
                             <input
                               type="radio"
                               name="activeFeed"
@@ -211,6 +260,13 @@ function Dashboard() {
                             </Link>
                             {f.description ? <span> — {f.description}</span> : null}
                           </label>
+                          <button
+                            onClick={() => deleteFeed(f.id)}
+                            className="btn-danger"
+                            style={{ padding: '0.35rem 0.6rem' }}
+                          >
+                            🗑 Usuń
+                          </button>
                         </li>
                       ))}
                     </ul>
@@ -219,6 +275,7 @@ function Dashboard() {
               </div>
             )}
 
+            {/* ───── ODCINKI ───── */}
             {activeTab === 'episodes' && (
               <>
                 <div className="card" style={{ padding: 16, marginBottom: 16 }}>
@@ -242,7 +299,12 @@ function Dashboard() {
                         <input type="text" name="description" placeholder="Opis" value={newEpisode.description} onChange={handleEpisodeField} />
                         <input type="file" name="coverFile" accept="image/*" onChange={handleEpisodeField} />
                         <input type="file" name="audioFile" accept="audio/*" onChange={handleEpisodeField} />
-                        <button type="submit">Dodaj odcinek</button>
+                        <button type="submit" disabled={atMaxEpisodes} title={atMaxEpisodes ? 'Limit odcinków w tym kanale wyczerpany' : ''}>
+                          {atMaxEpisodes ? 'Limit odcinków w kanale osiągnięty' : 'Dodaj odcinek'}
+                        </button>
+                        {atMaxEpisodes && (
+                          <div style={{ marginTop: 8 }}><Alert type="info">Osiągnięto limit odcinków w tym kanale.</Alert></div>
+                        )}
                       </form>
                     </>
                   )}
@@ -251,21 +313,31 @@ function Dashboard() {
                 <div className="podcast-list">
                   {episodes.map(ep => (
                     <div key={ep.id} className="podcast-item" style={{ position: 'relative' }}>
-                      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                        {ep.coverUrl ? (
-                          <img src={ep.coverUrl} alt="" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8 }} />
-                        ) : (
-                          <div style={{ width: 64, height: 64, background: '#eee', borderRadius: 8 }} />
-                        )}
-                        <div>
-                          <div style={{ fontWeight: 700 }}>{ep.title}</div>
-                          <div style={{ fontSize: 14, opacity: 0.85 }}>{ep.description}</div>
-                          {ep.audioUrl && (
-                            <audio controls style={{ marginTop: 6, width: 280 }}>
-                              <source src={ep.audioUrl} />
-                            </audio>
+                      <div style={{ display: 'flex', gap: 12, alignItems: 'center', width: '100%', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                          {ep.coverUrl ? (
+                            <img src={ep.coverUrl} alt="" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8 }} />
+                          ) : (
+                            <div style={{ width: 64, height: 64, background: '#eee', borderRadius: 8 }} />
                           )}
+                          <div>
+                            <div style={{ fontWeight: 700 }}>{ep.title}</div>
+                            <div style={{ fontSize: 14, opacity: 0.85 }}>{ep.description}</div>
+                            {ep.audioUrl && (
+                              <audio controls style={{ marginTop: 6, width: 280 }}>
+                                <source src={ep.audioUrl} />
+                              </audio>
+                            )}
+                          </div>
                         </div>
+
+                        <button
+                          onClick={() => deleteEpisode(ep.id)}
+                          className="btn-danger"
+                          style={{ padding: '0.35rem 0.6rem', alignSelf: 'flex-start' }}
+                        >
+                          🗑 Usuń
+                        </button>
                       </div>
                     </div>
                   ))}

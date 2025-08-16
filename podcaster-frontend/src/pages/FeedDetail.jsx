@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import PodcastCard from '../components/PodcastCard'
 import Alert from '../components/Alert'
-import { apiGet, apiPost, getToken } from '../lib/api'
+import { apiGet, apiPost, apiDelete, getToken } from '../lib/api'
 
 function FeedDetail() {
   const { feedId } = useParams()
@@ -21,7 +21,9 @@ function FeedDetail() {
         const all = await apiGet('/api/feeds')
         const f = Array.isArray(all) ? all.find(x => String(x.id) === String(feedId)) : null
         setFeed(f || null)
-      } catch { setFeed(null) }
+      } catch {
+        setFeed(null)
+      }
     })()
   }, [feedId])
 
@@ -30,7 +32,9 @@ function FeedDetail() {
     try {
       const list = await apiGet(`/api/feeds/${feedId}/episodes`)
       setEpisodes(Array.isArray(list) ? list : [])
-    } catch (e) { setError(e.message) }
+    } catch (e) {
+      setError(e.message)
+    }
   }
   useEffect(() => { loadEpisodes() }, [feedId])
 
@@ -58,7 +62,25 @@ function FeedDetail() {
       setForm({ title: '', description: '', cover: null, audio: null })
       setSuccess('Dodano odcinek!')
       setTimeout(() => setSuccess(''), 2200)
-    } catch (e) { setError(e.message) }
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
+  const onDeleteEpisode = async (episodeId) => {
+    setError(''); setSuccess('')
+    if (!loggedIn) return setError('Musisz być zalogowany, aby usuwać odcinki.')
+    const ep = episodes.find(e => String(e.id) === String(episodeId))
+    const ok = window.confirm(`Usunąć odcinek "${ep?.title || episodeId}"? Tej operacji nie można cofnąć.`)
+    if (!ok) return
+    try {
+      await apiDelete(`/api/episodes/${episodeId}`)
+      setEpisodes(prev => prev.filter(e => String(e.id) !== String(episodeId)))
+      setSuccess('Odcinek usunięty.')
+      setTimeout(() => setSuccess(''), 1800)
+    } catch (e) {
+      setError(e.message || 'Nie udało się usunąć odcinka.')
+    }
   }
 
   return (
@@ -97,6 +119,16 @@ function FeedDetail() {
               >
                 <source src={ep.audioUrl} />
               </audio>
+            )}
+            {loggedIn && (
+              <button
+                onClick={() => onDeleteEpisode(ep.id)}
+                className="btn-danger"
+                style={{ position: 'absolute', top: 12, right: 12, padding: '0.35rem 0.6rem' }}
+                aria-label={`Usuń odcinek ${ep.title}`}
+              >
+                🗑 Usuń
+              </button>
             )}
           </div>
         ))}
