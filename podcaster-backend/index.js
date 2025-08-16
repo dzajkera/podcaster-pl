@@ -1,3 +1,4 @@
+// index.js
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
@@ -62,11 +63,12 @@ function makePool() {
 const pool = makePool();
 
 // ---------------- Plany/limity ----------------
+// 1.1 Rozszerzone limity: maxFeeds, maxEpisodesPerFeed, maxStorageMB
 const PLANS = {
-  FREE:      { maxEpisodes: 5,    maxStorageMB: 200    },
-  STARTER:   { maxEpisodes: 100,  maxStorageMB: 5000   },
-  PRO:       { maxEpisodes: 1000, maxStorageMB: 50000  },
-  BUSINESS:  { maxEpisodes: null, maxStorageMB: null   },
+  FREE:      { maxFeeds: 1,   maxEpisodesPerFeed: 10,   maxStorageMB: 200    },
+  STARTER:   { maxFeeds: 5,   maxEpisodesPerFeed: 200,  maxStorageMB: 5000   },
+  PRO:       { maxFeeds: 20,  maxEpisodesPerFeed: 1000, maxStorageMB: 50000  },
+  BUSINESS:  { maxFeeds: null, maxEpisodesPerFeed: null, maxStorageMB: null  }, // null = bez limitu
 };
 const MB = 1024 * 1024;
 
@@ -90,7 +92,7 @@ async function initDb() {
       id            BIGSERIAL PRIMARY KEY,
       user_id       BIGINT REFERENCES users(id) ON DELETE CASCADE,
       title         TEXT NOT NULL,
-      slug          TEXT UNIQUE, -- opcjonalnie unikalny, można zdjąć UNIQUE jeśli wolisz per-user
+      slug          TEXT UNIQUE,
       description   TEXT,
       cover_url     TEXT,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -98,7 +100,7 @@ async function initDb() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_feeds_user_id ON feeds(user_id);`);
 
-  // episodes (dawne "podcasts")
+  // episodes
   await pool.query(`
     CREATE TABLE IF NOT EXISTS episodes (
       id              BIGSERIAL PRIMARY KEY,
@@ -118,19 +120,13 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_episodes_user_id ON episodes(user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_episodes_feed_id ON episodes(feed_id);`);
 
-  // ── migracja ze starej tabeli "podcasts" (jeśli istnieje) ──
-  // 1) sprawdź czy istnieje kolumna feed_id w episodes (powinna), a jeśli "podcasts" istnieje – przenieś dane
-  const { rows: hasOld } = await pool.query(`
-    SELECT to_regclass('public.podcasts') AS tbl;
-  `);
+  // migracja ze starej "podcasts" (jeżeli istnieje)
+  const { rows: hasOld } = await pool.query(`SELECT to_regclass('public.podcasts') AS tbl;`);
   if (hasOld?.[0]?.tbl === 'podcasts') {
     console.log('ℹ️ Wykryto starą tabelę podcasts — migracja do feeds/episodes...');
-    // utwórz po 1 feedzie per user z istniejących rekordów
-    // bierz unikalnych user_id ze starej tabeli
     const { rows: uids } = await pool.query(`SELECT DISTINCT user_id FROM podcasts WHERE user_id IS NOT NULL;`);
     for (const r of uids) {
       const uid = r.user_id;
-      // albo znajdź istniejący "Migrated Feed", albo utwórz
       const feedIns = await pool.query(
         `INSERT INTO feeds (user_id, title, slug, description, cover_url)
          VALUES ($1, $2, $3, $4, NULL)
@@ -147,8 +143,6 @@ async function initDb() {
         );
         feedId = f[0].id;
       }
-
-      // przenieś rekordy
       await pool.query(`
         INSERT INTO episodes (user_id, feed_id, title, description, cover_url, audio_url, cover_public_id, audio_public_id, audio_bytes, cover_bytes, created_at)
         SELECT user_id, $1, title, description, cover_url, audio_url, NULL, NULL, 0, 0, created_at
@@ -156,9 +150,6 @@ async function initDb() {
         WHERE user_id = $2;
       `, [feedId, uid]);
     }
-
-    // starej tabeli nie kasujemy automatycznie (bezpieczniej), ale możesz to zrobić ręcznie po weryfikacji:
-    // DROP TABLE podcasts;
     console.log('✅ Migracja zakończona (sprawdź dane, potem usuń "podcasts" jeśli zbędna).');
   }
 
@@ -231,30 +222,32 @@ async function authMiddleware(req, res, next) {
   }
 }
 
-async function checkPlanAndQuotas(req, res, next) {
+// ---------------- Limity / kwoty ----------------
+
+// pomocniczo: pobierz konfigurację planu
+function planConfig(plan) {
+  return PLANS[plan] || PLANS.FREE;
+}
+
+// 1.3 globalny storage + (legacy global) liczba odcinków – sprawdzane PRZED uploadem
+async function checkGlobalQuotas(req, res, next) {
   try {
     const { uid } = req.user;
     const { rows } = await pool.query('SELECT plan, storage_used FROM users WHERE id=$1', [uid]);
     if (!rows.length) return res.status(401).json({ error: 'Użytkownik nie istnieje' });
 
     const user = rows[0];
-    const planCfg = PLANS[user.plan] || PLANS.FREE;
+    const cfg = planConfig(user.plan);
 
-    if (planCfg.maxEpisodes !== null) {
-      const countRes = await pool.query('SELECT COUNT(*)::int AS cnt FROM episodes WHERE user_id=$1', [uid]);
-      if (countRes.rows[0].cnt >= planCfg.maxEpisodes) {
-        return res.status(403).json({ error: `Limit odcinków wyczerpany dla planu ${user.plan}.` });
-      }
-    }
-
+    // Rozmiary plików (incoming)
     const coverBytes = req.files?.['cover']?.[0]?.size || 0;
     const audioBytes = req.files?.['audio']?.[0]?.size || 0;
     const incoming = coverBytes + audioBytes;
 
-    if (planCfg.maxStorageMB !== null) {
-      const limitBytes = planCfg.maxStorageMB * MB;
+    if (cfg.maxStorageMB !== null) {
+      const limitBytes = cfg.maxStorageMB * MB;
       if (Number(user.storage_used) + incoming > limitBytes) {
-        return res.status(403).json({ error: `Brak miejsca w planie ${user.plan} (przekroczysz ${planCfg.maxStorageMB} MB).` });
+        return res.status(403).json({ error: `Brak miejsca w planie ${user.plan} (przekroczysz ${cfg.maxStorageMB} MB).` });
       }
     }
 
@@ -263,6 +256,49 @@ async function checkPlanAndQuotas(req, res, next) {
   } catch (e) {
     console.error('Quota check error:', e);
     return res.status(500).json({ error: 'Błąd sprawdzania limitów.' });
+  }
+}
+
+// 1.2 limit liczby feedów
+async function checkFeedCreateLimit(req, res, next) {
+  try {
+    const { uid } = req.user;
+    const { rows } = await pool.query('SELECT plan FROM users WHERE id=$1', [uid]);
+    if (!rows.length) return res.status(401).json({ error: 'Użytkownik nie istnieje' });
+    const cfg = planConfig(rows[0].plan);
+
+    if (cfg.maxFeeds !== null) {
+      const { rows: cnt } = await pool.query('SELECT COUNT(*)::int AS cnt FROM feeds WHERE user_id=$1', [uid]);
+      if (cnt[0].cnt >= cfg.maxFeeds) {
+        return res.status(403).json({ error: `Limit kanałów (${cfg.maxFeeds}) dla planu został wyczerpany.` });
+      }
+    }
+    next();
+  } catch (e) {
+    console.error('Feed limit error:', e);
+    res.status(500).json({ error: 'Błąd sprawdzania limitu kanałów.' });
+  }
+}
+
+// 1.3 limit liczby odcinków w danym feedzie
+async function checkEpisodePerFeedLimit(req, res, next) {
+  try {
+    const { uid } = req.user;
+    const feedId = req.params.feedId;
+    const { rows: urows } = await pool.query('SELECT plan FROM users WHERE id=$1', [uid]);
+    if (!urows.length) return res.status(401).json({ error: 'Użytkownik nie istnieje' });
+    const cfg = planConfig(urows[0].plan);
+
+    if (cfg.maxEpisodesPerFeed !== null) {
+      const { rows: cnt } = await pool.query('SELECT COUNT(*)::int AS cnt FROM episodes WHERE user_id=$1 AND feed_id=$2', [uid, feedId]);
+      if (cnt[0].cnt >= cfg.maxEpisodesPerFeed) {
+        return res.status(403).json({ error: `Limit odcinków (${cfg.maxEpisodesPerFeed}) w tym kanale został wyczerpany.` });
+      }
+    }
+    next();
+  } catch (e) {
+    console.error('Episode-per-feed limit error:', e);
+    res.status(500).json({ error: 'Błąd sprawdzania limitu odcinków w kanale.' });
   }
 }
 
@@ -352,7 +388,7 @@ app.get('/me', authMiddleware, async (req, res) => {
 
 // ---------------- FEEDS ----------------
 
-// Publiczne listowanie feedów (opcjonalnie możesz później ograniczyć)
+// Publiczne listowanie feedów
 app.get('/api/feeds', async (_req, res) => {
   try {
     const { rows } = await pool.query(
@@ -384,8 +420,8 @@ app.get('/api/my-feeds', authMiddleware, async (req, res) => {
   }
 });
 
-// Tworzenie feedu
-app.post('/api/feeds', authMiddleware, async (req, res) => {
+// 1.2 Tworzenie feedu z limitem maxFeeds
+app.post('/api/feeds', authMiddleware, checkFeedCreateLimit, async (req, res) => {
   try {
     const { title, description, slug } = req.body || {};
     if (!title?.trim()) return res.status(400).json({ error: 'Tytuł feedu jest wymagany.' });
@@ -403,20 +439,25 @@ app.post('/api/feeds', authMiddleware, async (req, res) => {
   }
 });
 
-// Usunięcie feedu + (uwaga) kasuje też odcinki przez CASCADE
+// 1.4 Usunięcie feedu + sprzątanie Cloudinary + odjęcie storage
 app.delete('/api/feeds/:feedId', authMiddleware, async (req, res) => {
+  const client = await pool.connect();
   try {
+    const feedId = req.params.feedId;
     // upewnij się, że feed należy do usera
-    const { rows } = await pool.query(`SELECT id FROM feeds WHERE id=$1 AND user_id=$2`, [req.params.feedId, req.user.uid]);
+    const { rows } = await client.query(`SELECT id FROM feeds WHERE id=$1 AND user_id=$2`, [feedId, req.user.uid]);
     if (!rows.length) return res.status(404).json({ error: 'Feed nie istnieje lub nie należy do Ciebie.' });
 
-    // posprzątaj pliki odcinków (pobierz public_id w batchu)
-    const { rows: eps } = await pool.query(
-      `SELECT cover_public_id, audio_public_id, cover_url, audio_url
+    // weź wszystkie epizody do sprzątnięcia i policz bajty
+    const { rows: eps } = await client.query(
+      `SELECT id, cover_public_id, audio_public_id, cover_url, audio_url,
+              COALESCE(cover_bytes,0) + COALESCE(audio_bytes,0) AS bytes
          FROM episodes
         WHERE feed_id=$1`,
-      [req.params.feedId]
+      [feedId]
     );
+
+    // Cloudinary cleanup (best effort)
     for (const ep of eps) {
       const cpid = ep.cover_public_id || (ep.cover_url ? tryExtractPublicIdFromUrl(ep.cover_url) : null);
       const apid = ep.audio_public_id || (ep.audio_url ? tryExtractPublicIdFromUrl(ep.audio_url) : null);
@@ -424,11 +465,23 @@ app.delete('/api/feeds/:feedId', authMiddleware, async (req, res) => {
       try { if (apid) await cloudinary.uploader.destroy(apid, { resource_type: 'video' }); } catch {}
     }
 
-    await pool.query(`DELETE FROM feeds WHERE id=$1 AND user_id=$2`, [req.params.feedId, req.user.uid]);
-    res.json({ ok: true });
+    // policz sumaryczne bajty do odjęcia
+    const totalBytes = eps.reduce((s, e) => s + Number(e.bytes || 0), 0);
+
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM feeds WHERE id=$1 AND user_id=$2`, [feedId, req.user.uid]);
+    if (totalBytes > 0) {
+      await client.query(`UPDATE users SET storage_used = GREATEST(storage_used - $1, 0) WHERE id=$2`, [totalBytes, req.user.uid]);
+    }
+    await client.query('COMMIT');
+
+    res.json({ ok: true, freedBytes: totalBytes });
   } catch (e) {
+    await (async () => { try { await client.query('ROLLBACK'); } catch {} })();
     console.error('Błąd usuwania feedu:', e);
     res.status(500).json({ error: 'Nie udało się usunąć feedu.' });
+  } finally {
+    client.release();
   }
 });
 
@@ -474,12 +527,13 @@ app.get('/api/my-episodes', authMiddleware, async (req, res) => {
   }
 });
 
-// Dodanie odcinka do feedu
+// 1.3 Dodanie odcinka do feedu: sprawdź własność feedu, limit per‑feed i storage
 app.post(
   '/api/feeds/:feedId/episodes',
   authMiddleware,
   upload.fields([{ name: 'cover', maxCount: 1 }, { name: 'audio', maxCount: 1 }]),
-  checkPlanAndQuotas,
+  checkEpisodePerFeedLimit,   // najpierw liczba odcinków w kanale
+  checkGlobalQuotas,          // potem storage
   async (req, res) => {
     const { title, description } = req.body || {};
     if (!title?.trim() || !description?.trim()) {
@@ -562,7 +616,7 @@ app.post(
   }
 );
 
-// Usuń odcinek
+// 1.4 Usuń odcinek: sprzątanie Cloudinary + odjęcie storage (było, zostaje)
 app.delete('/api/episodes/:id', authMiddleware, async (req, res) => {
   try {
     const sel = await pool.query(
@@ -603,8 +657,7 @@ app.delete('/api/episodes/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// ---------------- Legacy compatibility (stare ścieżki) ----------------
-// Zostawiamy publiczne listowanie dawnych "podcasts" jako alias do wszystkich epizodów
+// ---------------- Legacy public alias ----------------
 app.get('/api/podcasts', async (_req, res) => {
   try {
     const { rows } = await pool.query(
@@ -625,4 +678,3 @@ app.get('/api/podcasts', async (_req, res) => {
 app.listen(port, () => {
   console.log(`✅ Serwer działa na http://localhost:${port}`);
 });
-
