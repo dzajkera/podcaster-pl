@@ -1,4 +1,4 @@
-
+// src/pages/Dashboard.jsx
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import '../styles/Dashboard.css'
@@ -15,7 +15,8 @@ function Dashboard() {
   // feeds
   const [feeds, setFeeds] = useState([])
   const [activeFeedId, setActiveFeedId] = useState(null)
-  const [newFeed, setNewFeed] = useState({ title: '', slug: '', description: '' })
+  // ⬇️ dodano coverFile
+  const [newFeed, setNewFeed] = useState({ title: '', slug: '', description: '', coverFile: null })
 
   // episodes
   const [episodes, setEpisodes] = useState([])
@@ -84,9 +85,10 @@ function Dashboard() {
   const atMaxEpisodes = !!(planLimits && planLimits.maxEpisodesPerFeed !== null && episodes.length >= planLimits.maxEpisodesPerFeed)
 
   // handlers
+  // ⬇️ handler pól feedu z obsługą pliku
   const handleFeedField = (e) => {
-    const { name, value } = e.target
-    setNewFeed(prev => ({ ...prev, [name]: value }))
+    const { name, value, files } = e.target
+    setNewFeed(prev => ({ ...prev, [name]: files ? files[0] : value }))
     setError(''); setSuccess('')
   }
 
@@ -96,6 +98,7 @@ function Dashboard() {
     setError(''); setSuccess('')
   }
 
+  // ⬇️ createFeed → FormData + multipart
   const createFeed = async (e) => {
     e.preventDefault()
     setError(''); setSuccess('')
@@ -103,13 +106,15 @@ function Dashboard() {
     if (atMaxFeeds) return setError(`Osiągnięto limit kanałów (${planLimits.maxFeeds}).`)
 
     try {
-      const created = await apiPost('/api/feeds', {
-        title: newFeed.title.trim(),
-        slug: newFeed.slug?.trim() || null,
-        description: newFeed.description?.trim() || ''
-      })
+      const fd = new FormData()
+      fd.append('title', newFeed.title.trim())
+      if (newFeed.slug?.trim()) fd.append('slug', newFeed.slug.trim())
+      if (newFeed.description?.trim()) fd.append('description', newFeed.description.trim())
+      if (newFeed.coverFile) fd.append('cover', newFeed.coverFile)
+
+      const created = await apiPost('/api/feeds', fd, true) // multipart
       setFeeds(prev => [created, ...prev])
-      setNewFeed({ title: '', slug: '', description: '' })
+      setNewFeed({ title: '', slug: '', description: '', coverFile: null })
       setActiveFeedId(created.id)
       setActiveTab('episodes')
       setSuccess('Kanał utworzony!')
@@ -130,7 +135,7 @@ function Dashboard() {
       if (String(activeFeedId) === String(feedId)) {
         const next = feeds.find(f => String(f.id) !== String(feedId))
         setActiveFeedId(next?.id || null)
-        setEpisodes([]) // czyścimy listę odcinków dla usuniętego feedu
+        setEpisodes([])
       }
       setSuccess('Kanał usunięty.')
       setTimeout(() => setSuccess(''), 1800)
@@ -226,6 +231,8 @@ function Dashboard() {
                   <input name="title" placeholder="Tytuł *" value={newFeed.title} onChange={handleFeedField} />
                   <input name="slug" placeholder="Slug (opcjonalnie)" value={newFeed.slug} onChange={handleFeedField} />
                   <input name="description" placeholder="Opis (opcjonalnie)" value={newFeed.description} onChange={handleFeedField} />
+                  {/* ⬇️ okładka kanału */}
+                  <input type="file" name="coverFile" accept="image/*" onChange={handleFeedField} />
                   <button type="submit" disabled={atMaxFeeds} title={atMaxFeeds ? 'Limit kanałów w planie wyczerpany' : ''}>
                     {atMaxFeeds ? 'Limit kanałów osiągnięty' : 'Utwórz kanał'}
                   </button>
