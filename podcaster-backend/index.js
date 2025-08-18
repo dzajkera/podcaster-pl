@@ -98,6 +98,10 @@ async function initDb() {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // [1] dodatkowe kolumny na okładkę kanału
+  await pool.query(`ALTER TABLE feeds ADD COLUMN IF NOT EXISTS cover_public_id TEXT;`);
+  await pool.query(`ALTER TABLE feeds ADD COLUMN IF NOT EXISTS cover_bytes BIGINT DEFAULT 0;`);
+
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_feeds_user_id ON feeds(user_id);`);
 
   // episodes
@@ -223,13 +227,11 @@ async function authMiddleware(req, res, next) {
 }
 
 // ---------------- Limity / kwoty ----------------
-
-// pomocniczo: pobierz konfigurację planu
 function planConfig(plan) {
   return PLANS[plan] || PLANS.FREE;
 }
 
-// 1.3 globalny storage + (legacy global) liczba odcinków – sprawdzane PRZED uploadem
+// globalny storage – sprawdzane PRZED uploadem (działa dla cover/audio)
 async function checkGlobalQuotas(req, res, next) {
   try {
     const { uid } = req.user;
@@ -239,7 +241,6 @@ async function checkGlobalQuotas(req, res, next) {
     const user = rows[0];
     const cfg = planConfig(user.plan);
 
-    // Rozmiary plików (incoming)
     const coverBytes = req.files?.['cover']?.[0]?.size || 0;
     const audioBytes = req.files?.['audio']?.[0]?.size || 0;
     const incoming = coverBytes + audioBytes;
@@ -259,7 +260,7 @@ async function checkGlobalQuotas(req, res, next) {
   }
 }
 
-// 1.2 limit liczby feedów
+// limit liczby feedów
 async function checkFeedCreateLimit(req, res, next) {
   try {
     const { uid } = req.user;
@@ -280,7 +281,7 @@ async function checkFeedCreateLimit(req, res, next) {
   }
 }
 
-// 1.3 limit liczby odcinków w danym feedzie
+// limit liczby odcinków w danym feedzie
 async function checkEpisodePerFeedLimit(req, res, next) {
   try {
     const { uid } = req.user;
@@ -420,24 +421,121 @@ app.get('/api/my-feeds', authMiddleware, async (req, res) => {
   }
 });
 
-// 1.2 Tworzenie feedu z limitem maxFeeds
-app.post('/api/feeds', authMiddleware, checkFeedCreateLimit, async (req, res) => {
-  try {
-    const { title, description, slug } = req.body || {};
-    if (!title?.trim()) return res.status(400).json({ error: 'Tytuł feedu jest wymagany.' });
+// [2] Tworzenie feedu z limitem + (opcjonalnie) okładką (multipart)
+app.post(
+  '/api/feeds',
+  authMiddleware,
+  checkFeedCreateLimit,
+  upload.fields([{ name: 'cover', maxCount: 1 }]),
+  checkGlobalQuotas, // przelicza storage dla cover
+  async (req, res) => {
+    try {
+      const { title, description, slug } = req.body || {};
+      if (!title?.trim()) return res.status(400).json({ error: 'Tytuł feedu jest wymagany.' });
 
-    const ins = await pool.query(
-      `INSERT INTO feeds (user_id, title, slug, description, cover_url)
-       VALUES ($1,$2,$3,$4,NULL)
-       RETURNING id, user_id, title, slug, description, cover_url, created_at`,
-      [req.user.uid, title.trim(), slug?.trim() || null, description?.trim() || null]
-    );
-    res.status(201).json(ins.rows[0]);
-  } catch (e) {
-    console.error('Błąd tworzenia feedu:', e);
-    res.status(500).json({ error: 'Nie udało się utworzyć feedu.' });
+      const ins = await pool.query(
+        `INSERT INTO feeds (user_id, title, slug, description, cover_url)
+         VALUES ($1,$2,$3,$4,NULL)
+         RETURNING id, user_id, title, slug, description, cover_url, created_at`,
+        [req.user.uid, title.trim(), slug?.trim() || null, description?.trim() || null]
+      );
+      const feed = ins.rows[0];
+
+      const coverFile = req.files?.['cover']?.[0] || null;
+      if (coverFile) {
+        const bytes = coverFile.size || 0;
+        const up = await uploadToCloudinary(coverFile.buffer, {
+          publicId: `podcaster/users/${req.user.uid}/feeds/${feed.id}/cover`,
+          resourceType: 'image',
+        });
+        await pool.query(
+          `UPDATE feeds
+              SET cover_url=$1, cover_public_id=$2, cover_bytes=$3
+            WHERE id=$4`,
+          [up.url, up.public_id, bytes, feed.id]
+        );
+        if (bytes > 0) {
+          await pool.query(`UPDATE users SET storage_used = storage_used + $1 WHERE id=$2`, [bytes, req.user.uid]);
+        }
+        feed.cover_url = up.url;
+      }
+
+      res.status(201).json(feed);
+    } catch (e) {
+      console.error('Błąd tworzenia feedu:', e);
+      res.status(500).json({ error: 'Nie udało się utworzyć feedu.' });
+    }
   }
-});
+);
+
+// [3] Podmiana okładki kanału
+app.patch(
+  '/api/feeds/:feedId/cover',
+  authMiddleware,
+  upload.fields([{ name: 'cover', maxCount: 1 }]),
+  async (req, res) => {
+    try {
+      const feedId = req.params.feedId;
+      const coverFile = req.files?.['cover']?.[0] || null;
+      if (!coverFile) return res.status(400).json({ error: 'Brak pliku okładki.' });
+
+      const { rows } = await pool.query(
+        `SELECT id, user_id, cover_public_id, cover_url, cover_bytes FROM feeds WHERE id=$1 AND user_id=$2`,
+        [feedId, req.user.uid]
+      );
+      if (!rows.length) return res.status(404).json({ error: 'Feed nie istnieje lub nie należy do Ciebie.' });
+      const feed = rows[0];
+
+      // policz projektowane użycie storage: zdejmujemy stare cover_bytes, dodajemy nowe
+      const newBytes = coverFile.size || 0;
+      const { rows: urows } = await pool.query(`SELECT plan, storage_used FROM users WHERE id=$1`, [req.user.uid]);
+      const cfg = planConfig(urows[0].plan);
+      if (cfg.maxStorageMB !== null) {
+        const limitBytes = cfg.maxStorageMB * MB;
+        const projected = Number(urows[0].storage_used) - Number(feed.cover_bytes || 0) + newBytes;
+        if (projected > limitBytes) {
+          return res.status(403).json({ error: `Brak miejsca w planie ${urows[0].plan} (przekroczysz ${cfg.maxStorageMB} MB).` });
+        }
+      }
+
+      // usuń starą okładkę
+      try {
+        const pid = feed.cover_public_id || (feed.cover_url ? tryExtractPublicIdFromUrl(feed.cover_url) : null);
+        if (pid) await cloudinary.uploader.destroy(pid, { resource_type: 'image' });
+      } catch (e) {
+        console.warn('Feed cover destroy warn:', e?.message || e);
+      }
+      if (Number(feed.cover_bytes) > 0) {
+        await pool.query(
+          `UPDATE users SET storage_used = GREATEST(storage_used - $1, 0) WHERE id=$2`,
+          [Number(feed.cover_bytes), req.user.uid]
+        );
+      }
+
+      // wgraj nową
+      const up = await uploadToCloudinary(coverFile.buffer, {
+        publicId: `podcaster/users/${req.user.uid}/feeds/${feedId}/cover`,
+        resourceType: 'image',
+      });
+
+      await pool.query(
+        `UPDATE feeds
+            SET cover_url=$1, cover_public_id=$2, cover_bytes=$3
+          WHERE id=$4`,
+        [up.url, up.public_id, newBytes, feedId]
+      );
+
+      if (newBytes > 0) {
+        await pool.query(`UPDATE users SET storage_used = storage_used + $1 WHERE id=$2`, [newBytes, req.user.uid]);
+      }
+
+      res.json({ ok: true, coverUrl: up.url });
+    } catch (e) {
+      console.error('Błąd PATCH cover:', e);
+      res.status(500).json({ error: 'Nie udało się zaktualizować okładki.' });
+    }
+  }
+);
 
 // 1.4 Usunięcie feedu + sprzątanie Cloudinary + odjęcie storage
 app.delete('/api/feeds/:feedId', authMiddleware, async (req, res) => {
@@ -448,6 +546,29 @@ app.delete('/api/feeds/:feedId', authMiddleware, async (req, res) => {
     const { rows } = await client.query(`SELECT id FROM feeds WHERE id=$1 AND user_id=$2`, [feedId, req.user.uid]);
     if (!rows.length) return res.status(404).json({ error: 'Feed nie istnieje lub nie należy do Ciebie.' });
 
+    // [4] Usuń okładkę feedu i zdejmij jej bajty
+    const { rows: fmeta } = await client.query(
+      `SELECT cover_public_id, cover_url, cover_bytes
+         FROM feeds
+        WHERE id=$1 AND user_id=$2`,
+      [feedId, req.user.uid]
+    );
+    if (fmeta.length) {
+      const { cover_public_id, cover_url, cover_bytes } = fmeta[0];
+      try {
+        const pid = cover_public_id || (cover_url ? tryExtractPublicIdFromUrl(cover_url) : null);
+        if (pid) await cloudinary.uploader.destroy(pid, { resource_type: 'image' });
+      } catch (e) {
+        console.warn('Feed cover destroy warn:', e?.message || e);
+      }
+      if (Number(cover_bytes) > 0) {
+        await client.query(
+          `UPDATE users SET storage_used = GREATEST(storage_used - $1, 0) WHERE id=$2`,
+          [Number(cover_bytes), req.user.uid]
+        );
+      }
+    }
+
     // weź wszystkie epizody do sprzątnięcia i policz bajty
     const { rows: eps } = await client.query(
       `SELECT id, cover_public_id, audio_public_id, cover_url, audio_url,
@@ -457,7 +578,7 @@ app.delete('/api/feeds/:feedId', authMiddleware, async (req, res) => {
       [feedId]
     );
 
-    // Cloudinary cleanup (best effort)
+    // Cloudinary cleanup (best effort) – epizody
     for (const ep of eps) {
       const cpid = ep.cover_public_id || (ep.cover_url ? tryExtractPublicIdFromUrl(ep.cover_url) : null);
       const apid = ep.audio_public_id || (ep.audio_url ? tryExtractPublicIdFromUrl(ep.audio_url) : null);
@@ -465,19 +586,22 @@ app.delete('/api/feeds/:feedId', authMiddleware, async (req, res) => {
       try { if (apid) await cloudinary.uploader.destroy(apid, { resource_type: 'video' }); } catch {}
     }
 
-    // policz sumaryczne bajty do odjęcia
+    // policz sumaryczne bajty epizodów do odjęcia
     const totalBytes = eps.reduce((s, e) => s + Number(e.bytes || 0), 0);
 
     await client.query('BEGIN');
     await client.query(`DELETE FROM feeds WHERE id=$1 AND user_id=$2`, [feedId, req.user.uid]);
     if (totalBytes > 0) {
-      await client.query(`UPDATE users SET storage_used = GREATEST(storage_used - $1, 0) WHERE id=$2`, [totalBytes, req.user.uid]);
+      await client.query(
+        `UPDATE users SET storage_used = GREATEST(storage_used - $1, 0) WHERE id=$2`,
+        [totalBytes, req.user.uid]
+      );
     }
     await client.query('COMMIT');
 
     res.json({ ok: true, freedBytes: totalBytes });
   } catch (e) {
-    await (async () => { try { await client.query('ROLLBACK'); } catch {} })();
+    try { await client.query('ROLLBACK'); } catch {}
     console.error('Błąd usuwania feedu:', e);
     res.status(500).json({ error: 'Nie udało się usunąć feedu.' });
   } finally {
@@ -527,13 +651,13 @@ app.get('/api/my-episodes', authMiddleware, async (req, res) => {
   }
 });
 
-// 1.3 Dodanie odcinka do feedu: sprawdź własność feedu, limit per‑feed i storage
+// Dodanie odcinka do feedu: sprawdź własność feedu, limit per-feed i storage
 app.post(
   '/api/feeds/:feedId/episodes',
   authMiddleware,
   upload.fields([{ name: 'cover', maxCount: 1 }, { name: 'audio', maxCount: 1 }]),
-  checkEpisodePerFeedLimit,   // najpierw liczba odcinków w kanale
-  checkGlobalQuotas,          // potem storage
+  checkEpisodePerFeedLimit,   // liczba odcinków w kanale
+  checkGlobalQuotas,          // storage
   async (req, res) => {
     const { title, description } = req.body || {};
     if (!title?.trim() || !description?.trim()) {
@@ -616,7 +740,7 @@ app.post(
   }
 );
 
-// 1.4 Usuń odcinek: sprzątanie Cloudinary + odjęcie storage (było, zostaje)
+// Usuń odcinek: sprzątanie Cloudinary + odjęcie storage
 app.delete('/api/episodes/:id', authMiddleware, async (req, res) => {
   try {
     const sel = await pool.query(
