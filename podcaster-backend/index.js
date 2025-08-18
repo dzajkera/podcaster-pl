@@ -63,7 +63,6 @@ function makePool() {
 const pool = makePool();
 
 // ---------------- Plany/limity ----------------
-// 1.1 Rozszerzone limity: maxFeeds, maxEpisodesPerFeed, maxStorageMB
 const PLANS = {
   FREE:      { maxFeeds: 1,   maxEpisodesPerFeed: 10,   maxStorageMB: 200    },
   STARTER:   { maxFeeds: 5,   maxEpisodesPerFeed: 200,  maxStorageMB: 5000   },
@@ -98,7 +97,7 @@ async function initDb() {
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
-  // [1] dodatkowe kolumny na okładkę kanału
+  // dodatkowe kolumny na okładkę kanału
   await pool.query(`ALTER TABLE feeds ADD COLUMN IF NOT EXISTS cover_public_id TEXT;`);
   await pool.query(`ALTER TABLE feeds ADD COLUMN IF NOT EXISTS cover_bytes BIGINT DEFAULT 0;`);
 
@@ -421,7 +420,7 @@ app.get('/api/my-feeds', authMiddleware, async (req, res) => {
   }
 });
 
-// [2] Tworzenie feedu z limitem + (opcjonalnie) okładką (multipart)
+// Tworzenie feedu z limitem + (opcjonalnie) okładką (multipart)
 app.post(
   '/api/feeds',
   authMiddleware,
@@ -468,76 +467,76 @@ app.post(
   }
 );
 
-// [3] Podmiana okładki kanału
-app.patch(
-  '/api/feeds/:feedId/cover',
-  authMiddleware,
-  upload.fields([{ name: 'cover', maxCount: 1 }]),
-  async (req, res) => {
-    try {
-      const feedId = req.params.feedId;
-      const coverFile = req.files?.['cover']?.[0] || null;
-      if (!coverFile) return res.status(400).json({ error: 'Brak pliku okładki.' });
+// --- Podmiana okładki kanału: wspólny handler + aliasy PUT/PATCH ---
+const changeFeedCoverHandler = async (req, res) => {
+  try {
+    const feedId = req.params.feedId;
+    const file = req.file; // upload.single('cover')
+    if (!file) return res.status(400).json({ error: 'Brak pliku okładki.' });
 
-      const { rows } = await pool.query(
-        `SELECT id, user_id, cover_public_id, cover_url, cover_bytes FROM feeds WHERE id=$1 AND user_id=$2`,
-        [feedId, req.user.uid]
-      );
-      if (!rows.length) return res.status(404).json({ error: 'Feed nie istnieje lub nie należy do Ciebie.' });
-      const feed = rows[0];
+    const { rows } = await pool.query(
+      `SELECT id, user_id, cover_public_id, cover_url, cover_bytes
+         FROM feeds
+        WHERE id=$1 AND user_id=$2`,
+      [feedId, req.user.uid]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Feed nie istnieje lub nie należy do Ciebie.' });
+    const feed = rows[0];
 
-      // policz projektowane użycie storage: zdejmujemy stare cover_bytes, dodajemy nowe
-      const newBytes = coverFile.size || 0;
-      const { rows: urows } = await pool.query(`SELECT plan, storage_used FROM users WHERE id=$1`, [req.user.uid]);
-      const cfg = planConfig(urows[0].plan);
-      if (cfg.maxStorageMB !== null) {
-        const limitBytes = cfg.maxStorageMB * MB;
-        const projected = Number(urows[0].storage_used) - Number(feed.cover_bytes || 0) + newBytes;
-        if (projected > limitBytes) {
-          return res.status(403).json({ error: `Brak miejsca w planie ${urows[0].plan} (przekroczysz ${cfg.maxStorageMB} MB).` });
-        }
+    // Sprawdzenie limitu storage z uwzględnieniem podmiany
+    const { rows: urows } = await pool.query(`SELECT plan, storage_used FROM users WHERE id=$1`, [req.user.uid]);
+    const cfg = planConfig(urows[0].plan);
+    if (cfg.maxStorageMB !== null) {
+      const limitBytes = cfg.maxStorageMB * MB;
+      const projected = Number(urows[0].storage_used) - Number(feed.cover_bytes || 0) + file.size;
+      if (projected > limitBytes) {
+        return res.status(403).json({ error: `Brak miejsca w planie ${urows[0].plan} (przekroczysz ${cfg.maxStorageMB} MB).` });
       }
-
-      // usuń starą okładkę
-      try {
-        const pid = feed.cover_public_id || (feed.cover_url ? tryExtractPublicIdFromUrl(feed.cover_url) : null);
-        if (pid) await cloudinary.uploader.destroy(pid, { resource_type: 'image' });
-      } catch (e) {
-        console.warn('Feed cover destroy warn:', e?.message || e);
-      }
-      if (Number(feed.cover_bytes) > 0) {
-        await pool.query(
-          `UPDATE users SET storage_used = GREATEST(storage_used - $1, 0) WHERE id=$2`,
-          [Number(feed.cover_bytes), req.user.uid]
-        );
-      }
-
-      // wgraj nową
-      const up = await uploadToCloudinary(coverFile.buffer, {
-        publicId: `podcaster/users/${req.user.uid}/feeds/${feedId}/cover`,
-        resourceType: 'image',
-      });
-
-      await pool.query(
-        `UPDATE feeds
-            SET cover_url=$1, cover_public_id=$2, cover_bytes=$3
-          WHERE id=$4`,
-        [up.url, up.public_id, newBytes, feedId]
-      );
-
-      if (newBytes > 0) {
-        await pool.query(`UPDATE users SET storage_used = storage_used + $1 WHERE id=$2`, [newBytes, req.user.uid]);
-      }
-
-      res.json({ ok: true, coverUrl: up.url });
-    } catch (e) {
-      console.error('Błąd PATCH cover:', e);
-      res.status(500).json({ error: 'Nie udało się zaktualizować okładki.' });
     }
-  }
-);
 
-// 1.4 Usunięcie feedu + sprzątanie Cloudinary + odjęcie storage
+    // Usuń starą okładkę (best effort)
+    try {
+      const pid = feed.cover_public_id || (feed.cover_url ? tryExtractPublicIdFromUrl(feed.cover_url) : null);
+      if (pid) await cloudinary.uploader.destroy(pid, { resource_type: 'image' });
+    } catch (e) {
+      console.warn('Feed cover destroy warn:', e?.message || e);
+    }
+
+    // Odejmij stare bajty
+    if (Number(feed.cover_bytes) > 0) {
+      await pool.query(`UPDATE users SET storage_used = GREATEST(storage_used - $1, 0) WHERE id=$2`,
+        [Number(feed.cover_bytes), req.user.uid]);
+    }
+
+    // Wgraj nową okładkę
+    const up = await uploadToCloudinary(file.buffer, {
+      publicId: `podcaster/users/${req.user.uid}/feeds/${feedId}/cover`,
+      resourceType: 'image',
+    });
+
+    // Zapisz meta i dodaj nowe bajty
+    await pool.query(
+      `UPDATE feeds
+          SET cover_url=$1, cover_public_id=$2, cover_bytes=$3
+        WHERE id=$4`,
+      [up.url, up.public_id, file.size, feedId]
+    );
+    if (file.size > 0) {
+      await pool.query(`UPDATE users SET storage_used = storage_used + $1 WHERE id=$2`, [file.size, req.user.uid]);
+    }
+
+    return res.json({ ok: true, coverUrl: up.url });
+  } catch (e) {
+    console.error('changeFeedCover error:', e);
+    return res.status(500).json({ error: 'Nie udało się zaktualizować okładki.' });
+  }
+};
+
+// Rejestracja obu metod – PUT i PATCH
+app.put('/api/feeds/:feedId/cover', authMiddleware, upload.single('cover'), changeFeedCoverHandler);
+app.patch('/api/feeds/:feedId/cover', authMiddleware, upload.single('cover'), changeFeedCoverHandler);
+
+// Usunięcie feedu + sprzątanie Cloudinary + odjęcie storage
 app.delete('/api/feeds/:feedId', authMiddleware, async (req, res) => {
   const client = await pool.connect();
   try {
@@ -546,7 +545,7 @@ app.delete('/api/feeds/:feedId', authMiddleware, async (req, res) => {
     const { rows } = await client.query(`SELECT id FROM feeds WHERE id=$1 AND user_id=$2`, [feedId, req.user.uid]);
     if (!rows.length) return res.status(404).json({ error: 'Feed nie istnieje lub nie należy do Ciebie.' });
 
-    // [4] Usuń okładkę feedu i zdejmij jej bajty
+    // Usuń okładkę feedu i zdejmij jej bajty
     const { rows: fmeta } = await client.query(
       `SELECT cover_public_id, cover_url, cover_bytes
          FROM feeds
