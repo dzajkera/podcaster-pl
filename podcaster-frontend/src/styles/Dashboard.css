@@ -192,7 +192,7 @@
   color: #fff;
   border: none;
   border-radius: 6px;
-  font-weight: 600;
+  font-weight: 300;
   cursor: pointer;
 }
 .btn-danger:hover { opacity: .95; }
@@ -206,3 +206,46 @@
 }
 .btn-primary:disabled,
 button:disabled { opacity: .5; cursor: not-allowed; }
+
+.dashboard-container { }
+.dashboard-header { }
+
+.dashboard-content { margin-top: 12px; }
+
+/* listy w „Moje kanały” */
+.my-feeds-list {
+  margin: 0;
+  padding-left: 16px;
+}
+.my-feeds-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.active-feed {
+  background: #f9fafb;
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+/* lista odcinków */
+.podcast-list { display: grid; gap: 12px; }
+.podcast-item {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px;
+}
+.podcast-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.podcast-row__left { display: flex; align-items: center; gap: 12px; }
+
+.podcast-cover {
+  width: 64px; height: 64px; border-radius: 8px; object-fit: cover;
+}
+.podcast-cover--placeholder {
+  width: 64px; height: 64px; border-radius: 8px; background: #eee;
+}
+
+.podcast-player { margin-top: 6px; width: 280px; }

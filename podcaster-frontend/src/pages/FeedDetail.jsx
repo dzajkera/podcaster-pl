@@ -1,9 +1,9 @@
-// src/pages/FeedDetail.jsx
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import PodcastCard from '../components/PodcastCard'
 import Alert from '../components/Alert'
 import { API_BASE, apiGet, apiPost, apiDelete, getToken } from '../lib/api'
+import '../styles/FeedDetail.css'
 
 function FeedDetail() {
   const { feedId } = useParams()
@@ -12,15 +12,10 @@ function FeedDetail() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  // formularz odcinka
   const [form, setForm] = useState({ title: '', description: '', cover: null, audio: null })
-
-  // ⬇️ nowy: plik okładki kanału
   const [newFeedCover, setNewFeedCover] = useState(null)
-
   const loggedIn = !!getToken()
 
-  // meta kanału
   useEffect(() => {
     if (!feedId) return
     ;(async () => {
@@ -28,25 +23,19 @@ function FeedDetail() {
         const all = await apiGet('/api/feeds')
         const f = Array.isArray(all) ? all.find(x => String(x.id) === String(feedId)) : null
         setFeed(f || null)
-      } catch {
-        setFeed(null)
-      }
+      } catch { setFeed(null) }
     })()
   }, [feedId])
 
-  // lista odcinków
   const loadEpisodes = async () => {
     if (!feedId) return
     try {
       const list = await apiGet(`/api/feeds/${feedId}/episodes`)
       setEpisodes(Array.isArray(list) ? list : [])
-    } catch (e) {
-      setError(e.message)
-    }
+    } catch (e) { setError(e.message) }
   }
   useEffect(() => { loadEpisodes() }, [feedId])
 
-  // formularz odcinka
   const onChange = (e) => {
     const { name, value, files } = e.target
     setForm(prev => ({ ...prev, [name]: files ? files[0] : value }))
@@ -71,12 +60,9 @@ function FeedDetail() {
       setForm({ title: '', description: '', cover: null, audio: null })
       setSuccess('Dodano odcinek!')
       setTimeout(() => setSuccess(''), 2200)
-    } catch (e) {
-      setError(e.message)
-    }
+    } catch (e) { setError(e.message) }
   }
 
-  // ⬇️ nowy: zmiana okładki kanału
   const onCoverFileChange = (e) => {
     const file = e.target.files?.[0] || null
     setNewFeedCover(file)
@@ -93,8 +79,9 @@ function FeedDetail() {
       const fd = new FormData()
       fd.append('cover', newFeedCover)
 
+      // PATCH (nie PUT) – patrz backend
       const res = await fetch(`${API_BASE}/api/feeds/${feedId}/cover`, {
-        method: 'PUT',
+        method: 'PATCH',
         headers: { Authorization: `Bearer ${getToken()}` },
         body: fd
       })
@@ -103,14 +90,11 @@ function FeedDetail() {
         throw new Error(msg?.error || 'Nie udało się podmienić okładki.')
       }
       const updated = await res.json()
-      // backend zwraca coverUrl
-      setFeed(prev => (prev ? { ...prev, cover_url: undefined, coverUrl: updated.coverUrl } : prev))
+      setFeed(prev => (prev ? { ...prev, coverUrl: updated.coverUrl } : prev))
       setNewFeedCover(null)
       setSuccess('Okładka kanału zaktualizowana.')
       setTimeout(() => setSuccess(''), 2000)
-    } catch (e) {
-      setError(e.message)
-    }
+    } catch (e) { setError(e.message) }
   }
 
   const onDeleteEpisode = async (episodeId) => {
@@ -124,71 +108,57 @@ function FeedDetail() {
       setEpisodes(prev => prev.filter(e => String(e.id) !== String(episodeId)))
       setSuccess('Odcinek usunięty.')
       setTimeout(() => setSuccess(''), 1800)
-    } catch (e) {
-      setError(e.message || 'Nie udało się usunąć odcinka.')
-    }
+    } catch (e) { setError(e.message || 'Nie udało się usunąć odcinka.') }
   }
 
   return (
     <div className="container">
-      <div style={{ marginBottom: 12 }}>
+      <div className="mb-12">
         <Link to="/my-feeds">← Moje kanały</Link>
       </div>
 
-      <h2 style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        {/* ⬇️ miniaturka okładki kanału (jeśli jest) */}
-        {feed?.coverUrl && (
-          <img
-            src={feed.coverUrl}
-            alt=""
-            style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 8 }}
-          />
-        )}
+      <h2 className="feed-header">
+        {feed?.coverUrl && <img src={feed.coverUrl} alt="" className="feed-cover" />}
         {feed ? feed.title : 'Kanał'}
       </h2>
       {feed?.description && <p style={{ color: '#374151' }}>{feed.description}</p>}
 
-      {/* ⬇️ formularz zmiany okładki kanału */}
       {loggedIn && (
-        <form onSubmit={onChangeFeedCover} style={{ margin: '8px 0 16px', display: 'flex', gap: 8, alignItems: 'center' }}>
+        <form onSubmit={onChangeFeedCover} className="feed-change-cover">
           <input type="file" accept="image/*" onChange={onCoverFileChange} />
-          <button type="submit">Zmień okładkę</button>
+          <button type="submit" className="btn btn-primary">Zmień okładkę</button>
         </form>
       )}
 
       {loggedIn ? (
-        <form onSubmit={onAddEpisode} className="podcast-form" style={{ marginTop: 12 }}>
+        <form onSubmit={onAddEpisode} className="podcast-form mt-8">
           <input name="title" placeholder="Tytuł odcinka" value={form.title} onChange={onChange} />
           <input name="description" placeholder="Opis" value={form.description} onChange={onChange} />
           <input type="file" name="cover" accept="image/*" onChange={onChange} />
           <input type="file" name="audio" accept="audio/*" onChange={onChange} />
-          <button type="submit">Dodaj odcinek</button>
+          <button type="submit" className="btn btn-primary">Dodaj odcinek</button>
         </form>
       ) : (
         <Alert type="info"><Link to="/login">Zaloguj się</Link>, aby dodawać odcinki.</Alert>
       )}
 
-      {error && <Alert type="error" style={{ marginTop: 8 }}>{error}</Alert>}
-      {success && <Alert type="success" style={{ marginTop: 8 }}>{success}</Alert>}
+      {error && <Alert type="error" className="mt-8">{error}</Alert>}
+      {success && <Alert type="success" className="mt-8">{success}</Alert>}
 
-      <div className="podcast-list" style={{ marginTop: 16 }}>
+      <div className="podcast-list mt-8">
         {episodes.map(ep => (
           <div key={ep.id} className="podcast-item" style={{ position: 'relative' }}>
             <PodcastCard podcast={ep} />
             {ep.audioUrl && (
-              <audio
-                className="podcast-player"
-                controls
-                style={{ marginTop: 6, width: '100%' }}
-              >
+              <audio className="podcast-player" controls>
                 <source src={ep.audioUrl} />
               </audio>
             )}
             {loggedIn && (
               <button
                 onClick={() => onDeleteEpisode(ep.id)}
-                className="btn-danger"
-                style={{ position: 'absolute', top: 12, right: 12, padding: '0.35rem 0.6rem' }}
+                className="btn btn-danger"
+                style={{ position: 'absolute', top: 12, right: 12 }}
                 aria-label={`Usuń odcinek ${ep.title}`}
               >
                 🗑 Usuń

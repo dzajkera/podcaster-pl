@@ -1,4 +1,3 @@
-// src/pages/Dashboard.jsx
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import '../styles/Dashboard.css'
@@ -15,7 +14,6 @@ function Dashboard() {
   // feeds
   const [feeds, setFeeds] = useState([])
   const [activeFeedId, setActiveFeedId] = useState(null)
-  // ⬇️ dodano coverFile
   const [newFeed, setNewFeed] = useState({ title: '', slug: '', description: '', coverFile: null })
 
   // episodes
@@ -59,8 +57,7 @@ function Dashboard() {
         const mine = Array.isArray(list) ? list.filter(f => String(f.user_id) === String(me.id)) : []
         setFeeds(mine)
         if (!activeFeedId && mine.length > 0) setActiveFeedId(mine[0].id)
-      } catch (e) {
-        console.error(e)
+      } catch {
         setFeeds([])
       }
     })()
@@ -73,8 +70,7 @@ function Dashboard() {
       try {
         const list = await apiGet(`/api/feeds/${activeFeedId}/episodes`)
         setEpisodes(Array.isArray(list) ? list : [])
-      } catch (e) {
-        console.error(e)
+      } catch {
         setEpisodes([])
       }
     })()
@@ -85,7 +81,6 @@ function Dashboard() {
   const atMaxEpisodes = !!(planLimits && planLimits.maxEpisodesPerFeed !== null && episodes.length >= planLimits.maxEpisodesPerFeed)
 
   // handlers
-  // ⬇️ handler pól feedu z obsługą pliku
   const handleFeedField = (e) => {
     const { name, value, files } = e.target
     setNewFeed(prev => ({ ...prev, [name]: files ? files[0] : value }))
@@ -98,7 +93,6 @@ function Dashboard() {
     setError(''); setSuccess('')
   }
 
-  // ⬇️ createFeed → FormData + multipart
   const createFeed = async (e) => {
     e.preventDefault()
     setError(''); setSuccess('')
@@ -112,7 +106,7 @@ function Dashboard() {
       if (newFeed.description?.trim()) fd.append('description', newFeed.description.trim())
       if (newFeed.coverFile) fd.append('cover', newFeed.coverFile)
 
-      const created = await apiPost('/api/feeds', fd, true) // multipart
+      const created = await apiPost('/api/feeds', fd, true)
       setFeeds(prev => [created, ...prev])
       setNewFeed({ title: '', slug: '', description: '', coverFile: null })
       setActiveFeedId(created.id)
@@ -199,7 +193,7 @@ function Dashboard() {
         )}
 
         {loggedIn && (
-          <div style={{ marginTop: 8, fontSize: 14, opacity: 0.9 }}>
+          <div className="mt-8" style={{fontSize:14, opacity:.9}}>
             Zalogowano jako <strong>{me.email}</strong> (plan: <strong>{me.plan}</strong>)
             {planLimits && (
               <> • odcinki: <strong>{me.episodes}</strong>
@@ -213,47 +207,43 @@ function Dashboard() {
 
       <div className="dashboard-content">
         {!loggedIn ? (
-          <div className="card" style={{ padding: '1.25rem', border: '1px solid #e5e7eb', borderRadius: 8, background: '#fff' }}>
-            <h3 style={{ marginTop: 0 }}>Panel dostępny po zalogowaniu</h3>
+          <div className="card p-20">
+            <h3 className="mt-0">Panel dostępny po zalogowaniu</h3>
             <p>Zaloguj się, aby zarządzać kanałami i odcinkami.</p>
-            <Link to="/login" className="btn-primary">Zaloguj się</Link>
+            <Link to="/login" className="btn btn-primary">Zaloguj się</Link>
           </div>
         ) : (
           <>
-            {error && <Alert type="error" style={{ marginBottom: 12 }}>{error}</Alert>}
-            {success && <Alert type="success" style={{ marginBottom: 12 }}>{success}</Alert>}
+            {error && <Alert type="error" className="mb-12">{error}</Alert>}
+            {success && <Alert type="success" className="mb-12">{success}</Alert>}
 
             {/* ───── KANAŁY ───── */}
             {activeTab === 'feeds' && (
-              <div className="grid" style={{ gap: 16 }}>
-                <form onSubmit={createFeed} className="card" style={{ padding: 16 }}>
-                  <h3 style={{ marginTop: 0 }}>Nowy kanał</h3>
+              <div className="grid">
+                <form onSubmit={createFeed} className="card p-16">
+                  <h3 className="mt-0">Nowy kanał</h3>
                   <input name="title" placeholder="Tytuł *" value={newFeed.title} onChange={handleFeedField} />
                   <input name="slug" placeholder="Slug (opcjonalnie)" value={newFeed.slug} onChange={handleFeedField} />
                   <input name="description" placeholder="Opis (opcjonalnie)" value={newFeed.description} onChange={handleFeedField} />
-                  {/* ⬇️ okładka kanału */}
                   <input type="file" name="coverFile" accept="image/*" onChange={handleFeedField} />
-                  <button type="submit" disabled={atMaxFeeds} title={atMaxFeeds ? 'Limit kanałów w planie wyczerpany' : ''}>
+                  <button type="submit" className="btn btn-primary" disabled={atMaxFeeds} title={atMaxFeeds ? 'Limit kanałów w planie wyczerpany' : ''}>
                     {atMaxFeeds ? 'Limit kanałów osiągnięty' : 'Utwórz kanał'}
                   </button>
-                  {atMaxFeeds && (
-                    <div style={{ marginTop: 8 }}><Alert type="info">Osiągnięto limit kanałów w Twoim planie.</Alert></div>
-                  )}
+                  {atMaxFeeds && <div className="mt-8"><Alert type="info">Osiągnięto limit kanałów w Twoim planie.</Alert></div>}
                 </form>
 
-                <div className="card" style={{ padding: 16 }}>
-                  <h3 style={{ marginTop: 0 }}>Moje kanały</h3>
+                <div className="card p-16">
+                  <h3 className="mt-0">Moje kanały</h3>
                   {feeds.length === 0 ? (
                     <Alert type="info">Nie masz jeszcze żadnych kanałów.</Alert>
                   ) : (
-                    <ul style={{ margin: 0, paddingLeft: 16 }}>
+                    <ul className="my-feeds-list">
                       {feeds.map(f => (
                         <li
                           key={f.id}
-                          style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}
-                          className={String(activeFeedId) === String(f.id) ? 'active-feed' : ''}
+                          className={`my-feeds-item ${String(activeFeedId) === String(f.id) ? 'active-feed' : ''}`}
                         >
-                          <label style={{ cursor: 'pointer', flex: 1 }}>
+                          <label style={{ cursor: 'pointer' }} className="w-100">
                             <input
                               type="radio"
                               name="activeFeed"
@@ -267,13 +257,7 @@ function Dashboard() {
                             </Link>
                             {f.description ? <span> — {f.description}</span> : null}
                           </label>
-                          <button
-                            onClick={() => deleteFeed(f.id)}
-                            className="btn-danger"
-                            style={{ padding: '0.35rem 0.6rem' }}
-                          >
-                            🗑 Usuń
-                          </button>
+                          <button onClick={() => deleteFeed(f.id)} className="btn btn-danger">🗑 Usuń</button>
                         </li>
                       ))}
                     </ul>
@@ -285,13 +269,13 @@ function Dashboard() {
             {/* ───── ODCINKI ───── */}
             {activeTab === 'episodes' && (
               <>
-                <div className="card" style={{ padding: 16, marginBottom: 16 }}>
-                  <h3 style={{ marginTop: 0 }}>Dodaj odcinek</h3>
+                <div className="card p-16 mb-12">
+                  <h3 className="mt-0">Dodaj odcinek</h3>
                   {feeds.length === 0 ? (
                     <Alert type="info">Najpierw utwórz kanał w zakładce <strong>Kanały</strong>.</Alert>
                   ) : (
                     <>
-                      <div style={{ marginBottom: 8 }}>
+                      <div className="mb-12">
                         <label>Aktywny kanał:&nbsp;</label>
                         <select value={activeFeedId || ''} onChange={(e) => setActiveFeedId(e.target.value)}>
                           {feeds.map(f => (
@@ -301,17 +285,15 @@ function Dashboard() {
                         &nbsp; <Link to={`/feeds/${activeFeedId || feeds[0]?.id}`}>przejdź do szczegółów</Link>
                       </div>
 
-                      <form onSubmit={addEpisode}>
+                      <form onSubmit={addEpisode} className="w-100">
                         <input type="text" name="title" placeholder="Tytuł odcinka" value={newEpisode.title} onChange={handleEpisodeField} />
                         <input type="text" name="description" placeholder="Opis" value={newEpisode.description} onChange={handleEpisodeField} />
                         <input type="file" name="coverFile" accept="image/*" onChange={handleEpisodeField} />
                         <input type="file" name="audioFile" accept="audio/*" onChange={handleEpisodeField} />
-                        <button type="submit" disabled={atMaxEpisodes} title={atMaxEpisodes ? 'Limit odcinków w tym kanale wyczerpany' : ''}>
+                        <button type="submit" className="btn btn-primary" disabled={atMaxEpisodes} title={atMaxEpisodes ? 'Limit odcinków w tym kanale wyczerpany' : ''}>
                           {atMaxEpisodes ? 'Limit odcinków w kanale osiągnięty' : 'Dodaj odcinek'}
                         </button>
-                        {atMaxEpisodes && (
-                          <div style={{ marginTop: 8 }}><Alert type="info">Osiągnięto limit odcinków w tym kanale.</Alert></div>
-                        )}
+                        {atMaxEpisodes && <div className="mt-8"><Alert type="info">Osiągnięto limit odcinków w tym kanale.</Alert></div>}
                       </form>
                     </>
                   )}
@@ -319,32 +301,26 @@ function Dashboard() {
 
                 <div className="podcast-list">
                   {episodes.map(ep => (
-                    <div key={ep.id} className="podcast-item" style={{ position: 'relative' }}>
-                      <div style={{ display: 'flex', gap: 12, alignItems: 'center', width: '100%', justifyContent: 'space-between' }}>
-                        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                    <div key={ep.id} className="podcast-item">
+                      <div className="podcast-row">
+                        <div className="podcast-row__left">
                           {ep.coverUrl ? (
-                            <img src={ep.coverUrl} alt="" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8 }} />
+                            <img src={ep.coverUrl} alt="" className="podcast-cover" />
                           ) : (
-                            <div style={{ width: 64, height: 64, background: '#eee', borderRadius: 8 }} />
+                            <div className="podcast-cover--placeholder" />
                           )}
                           <div>
                             <div style={{ fontWeight: 700 }}>{ep.title}</div>
                             <div style={{ fontSize: 14, opacity: 0.85 }}>{ep.description}</div>
                             {ep.audioUrl && (
-                              <audio controls style={{ marginTop: 6, width: 280 }}>
+                              <audio controls className="podcast-player">
                                 <source src={ep.audioUrl} />
                               </audio>
                             )}
                           </div>
                         </div>
 
-                        <button
-                          onClick={() => deleteEpisode(ep.id)}
-                          className="btn-danger"
-                          style={{ padding: '0.35rem 0.6rem', alignSelf: 'flex-start' }}
-                        >
-                          🗑 Usuń
-                        </button>
+                        <button onClick={() => deleteEpisode(ep.id)} className="btn btn-danger">🗑 Usuń</button>
                       </div>
                     </div>
                   ))}

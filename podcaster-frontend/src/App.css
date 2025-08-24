@@ -168,3 +168,79 @@ audio,
   border-radius: 6px;
   background-color: #fafafa;
 }
+
+/* ===== Utilities ===== */
+.mt-0 { margin-top: 0; }
+.mt-8 { margin-top: 8px; }
+.mb-12 { margin-bottom: 12px; }
+.p-16 { padding: 16px; }
+.p-20 { padding: 20px; }
+
+.flex { display: flex; }
+.items-center { align-items: center; }
+.justify-between { justify-content: space-between; }
+.gap-8 { gap: 8px; }
+.gap-12 { gap: 12px; }
+.w-100 { width: 100%; }
+
+/* ===== Shared UI ===== */
+.card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 920px) { .grid { grid-template-columns: 1fr; } }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: .5rem .9rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-weight: 600;
+}
+.btn-primary {
+  background: #0b5ed7;
+  color: #fff;
+}
+.btn-danger {
+  background: #ef4444;
+  color: #fff;
+}
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+
+/* Tabs */
+.dashboard-tabs {
+  display: flex;
+  gap: 8px;
+}
+.dashboard-tabs button {
+  padding: .45rem .8rem;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+}
+.dashboard-tabs button.active {
+  background: #111827;
+  color: #fff;
+  border-color: #111827;
+}
+
+/* Common list look */
+.simple-list { margin: 0; padding-left: 16px; }
+.simple-list li { margin-bottom: 6px; list-style: disc; }
+
+/* Alerts (jeśli nie masz) – proste kolory */
+.alert { padding: .65rem .8rem; border-radius: 8px; }
+.alert--info { background: #eff6ff; color: #1e40af; }
+.alert--error { background: #fef2f2; color: #991b1b; }
+.alert--success { background: #ecfdf5; color: #065f46; }

@@ -1,0 +1,10 @@
+
+.feed-header { display: flex; align-items: center; gap: 12px; }
+.feed-cover { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; }
+
+.feed-change-cover {
+  margin: 8px 0 16px;
+  display: flex; gap: 8px; align-items: center;
+}
+
+.podcast-player { margin-top: 6px; width: 100%; }
