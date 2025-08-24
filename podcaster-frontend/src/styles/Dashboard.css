@@ -1,3 +1,4 @@
+/* główny kontener */
 .dashboard-container {
   padding: 2rem 1rem;
   max-width: 720px;
@@ -5,7 +6,7 @@
 }
 
 .dashboard-header {
-  margin-top: 2rem; /* dodaj */
+  margin-top: 2rem;
   margin-bottom: 1rem;
 }
 
@@ -15,7 +16,6 @@
   margin-bottom: 2rem;
   flex-wrap: wrap;
 }
-
 .dashboard-tabs button {
   padding: 0.5rem 1rem;
   border: none;
@@ -26,34 +26,30 @@
   color: #111827;
   transition: background-color 0.2s;
 }
-
 .dashboard-tabs button:hover {
   background-color: #d1d5db;
 }
-
 .dashboard-tabs .active {
   background-color: #111827;
   color: #fff;
 }
 
 .dashboard-content {
+  margin-top: 12px;
   padding-bottom: 4rem;
 }
 
+/* formularze */
 .podcast-form {
   display: flex;
   flex-direction: column;
   gap: 1rem;
   margin-bottom: 1.5rem;
-}
-
-.podcast-form {
   padding: 1.5rem;
   background-color: #fff;
   border-radius: 10px;
   box-shadow: 0 2px 10px rgba(0,0,0,0.05);
 }
-
 .podcast-form input[type="text"],
 .podcast-form input[type="file"] {
   padding: 0.5rem;
@@ -61,7 +57,6 @@
   border-radius: 6px;
   font-size: 1rem;
 }
-
 .podcast-form button {
   padding: 0.75rem 1.5rem;
   background-color: #111827;
@@ -70,13 +65,13 @@
   border: none;
   border-radius: 6px;
   cursor: pointer;
-  align-self:flex-start;
+  align-self: flex-start;
 }
-
 .podcast-form button:hover {
   background-color: #1f2937;
 }
 
+/* komunikaty */
 .message {
   padding: 0.75rem 1rem;
   border-radius: 6px;
@@ -84,90 +79,91 @@
   max-width: 100%;
   margin-top: 0.5rem;
 }
-
 .message.success {
   background-color: #d1fae5;
   color: #065f46;
 }
-
 .message.error {
   background-color: #fee2e2;
   color: #991b1b;
 }
 
+/* listy kanałów */
+.my-feeds-list {
+  margin: 0;
+  padding-left: 16px;
+}
+.my-feeds-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.active-feed {
+  background: #f9fafb;
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+/* lista odcinków */
 .podcast-list {
   display: flex;
   flex-direction: column;
   gap: 1rem;
 }
-
-.podcast-card {
-  display: flex;
-  gap: 1.5rem;
-  padding: 1rem;
+.podcast-item {
+  background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  background-color: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-  align-items: flex-start;
-  flex-wrap: wrap;
+  padding: 12px;
 }
-
-.cover-image {
-  width: 120px;
-  height: 120px;
+.podcast-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.podcast-row__left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.podcast-cover {
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
   object-fit: cover;
-  border-radius: 6px;
-  flex-shrink: 0;
 }
-
-.podcast-details {
-  flex: 1;
+.podcast-cover--placeholder {
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  background: #eee;
 }
+.podcast-title { font-size: 1.25rem; font-weight: 700; }
+.podcast-description { font-size: 14px; color: #374151; opacity: 0.85; }
+.podcast-player { margin-top: 6px; width: 280px; }
 
-.podcast-title {
-  font-size: 1.25rem;
-  margin: 0 0 0.5rem;
-  color: #111827;
-}
-
-.podcast-description {
-  margin: 0 0 0.75rem;
-  color: #374151;
-}
-
-.audio-player {
-  width: 100%;
-}
-
+/* dystrybucja */
 .distribution-settings {
   display: flex;
   flex-direction: column;
   gap: 2rem;
   padding-top: 1rem;
 }
-
-.distribution-settings {
-  display: flex;
-  flex-direction: column;
-  gap: 2rem;
-  padding-top: 1rem;
-}
-
 .distribution-card {
   border: 1px solid #e5e7eb;
   border-radius: 6px;
   padding: 1rem;
   background-color: #f9fafb;
 }
-
 .platform-options {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   margin: 1rem 0;
 }
-
 .distribute-button {
   padding: 0.5rem 1rem;
   background-color: #3b82f6;
@@ -179,14 +175,7 @@
   opacity: 0.7;
 }
 
-/* aktywny kanał na liście */
-.active-feed {
-  background: #f3f4f6;
-  border-radius: 8px;
-  padding: 6px 8px;
-}
-
-/* ogólne style przycisku kasowania */
+/* przyciski */
 .btn-danger {
   background: #ef4444;
   color: #fff;
@@ -206,46 +195,3 @@
 }
 .btn-primary:disabled,
 button:disabled { opacity: .5; cursor: not-allowed; }
-
-.dashboard-container { }
-.dashboard-header { }
-
-.dashboard-content { margin-top: 12px; }
-
-/* listy w „Moje kanały” */
-.my-feeds-list {
-  margin: 0;
-  padding-left: 16px;
-}
-.my-feeds-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
-.active-feed {
-  background: #f9fafb;
-  border-radius: 6px;
-  padding: 4px 6px;
-}
-
-/* lista odcinków */
-.podcast-list { display: grid; gap: 12px; }
-.podcast-item {
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  padding: 12px;
-}
-.podcast-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.podcast-row__left { display: flex; align-items: center; gap: 12px; }
-
-.podcast-cover {
-  width: 64px; height: 64px; border-radius: 8px; object-fit: cover;
-}
-.podcast-cover--placeholder {
-  width: 64px; height: 64px; border-radius: 8px; background: #eee;
-}
-
-.podcast-player { margin-top: 6px; width: 280px; }

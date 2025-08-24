@@ -57,7 +57,8 @@ function Dashboard() {
         const mine = Array.isArray(list) ? list.filter(f => String(f.user_id) === String(me.id)) : []
         setFeeds(mine)
         if (!activeFeedId && mine.length > 0) setActiveFeedId(mine[0].id)
-      } catch {
+      } catch (e) {
+        console.error(e)
         setFeeds([])
       }
     })()
@@ -70,7 +71,8 @@ function Dashboard() {
       try {
         const list = await apiGet(`/api/feeds/${activeFeedId}/episodes`)
         setEpisodes(Array.isArray(list) ? list : [])
-      } catch {
+      } catch (e) {
+        console.error(e)
         setEpisodes([])
       }
     })()
@@ -106,7 +108,7 @@ function Dashboard() {
       if (newFeed.description?.trim()) fd.append('description', newFeed.description.trim())
       if (newFeed.coverFile) fd.append('cover', newFeed.coverFile)
 
-      const created = await apiPost('/api/feeds', fd, true)
+      const created = await apiPost('/api/feeds', fd, true) // multipart
       setFeeds(prev => [created, ...prev])
       setNewFeed({ title: '', slug: '', description: '', coverFile: null })
       setActiveFeedId(created.id)
@@ -193,7 +195,7 @@ function Dashboard() {
         )}
 
         {loggedIn && (
-          <div className="mt-8" style={{fontSize:14, opacity:.9}}>
+          <div className="text-sm opacity-90" style={{ marginTop: 8 }}>
             Zalogowano jako <strong>{me.email}</strong> (plan: <strong>{me.plan}</strong>)
             {planLimits && (
               <> • odcinki: <strong>{me.episodes}</strong>
@@ -207,57 +209,58 @@ function Dashboard() {
 
       <div className="dashboard-content">
         {!loggedIn ? (
-          <div className="card p-20">
-            <h3 className="mt-0">Panel dostępny po zalogowaniu</h3>
+          <div className="card card-login">
+            <h3>Panel dostępny po zalogowaniu</h3>
             <p>Zaloguj się, aby zarządzać kanałami i odcinkami.</p>
-            <Link to="/login" className="btn btn-primary">Zaloguj się</Link>
+            <Link to="/login" className="btn-primary">Zaloguj się</Link>
           </div>
         ) : (
           <>
-            {error && <Alert type="error" className="mb-12">{error}</Alert>}
-            {success && <Alert type="success" className="mb-12">{success}</Alert>}
+            {error && <Alert type="error" style={{ marginBottom: 12 }}>{error}</Alert>}
+            {success && <Alert type="success" style={{ marginBottom: 12 }}>{success}</Alert>}
 
             {/* ───── KANAŁY ───── */}
             {activeTab === 'feeds' && (
-              <div className="grid">
-                <form onSubmit={createFeed} className="card p-16">
-                  <h3 className="mt-0">Nowy kanał</h3>
+              <div className="grid" style={{ gap: 16 }}>
+                <form onSubmit={createFeed} className="card card-pad">
+                  <h3>Nowy kanał</h3>
                   <input name="title" placeholder="Tytuł *" value={newFeed.title} onChange={handleFeedField} />
                   <input name="slug" placeholder="Slug (opcjonalnie)" value={newFeed.slug} onChange={handleFeedField} />
                   <input name="description" placeholder="Opis (opcjonalnie)" value={newFeed.description} onChange={handleFeedField} />
                   <input type="file" name="coverFile" accept="image/*" onChange={handleFeedField} />
-                  <button type="submit" className="btn btn-primary" disabled={atMaxFeeds} title={atMaxFeeds ? 'Limit kanałów w planie wyczerpany' : ''}>
+                  <button type="submit" disabled={atMaxFeeds} title={atMaxFeeds ? 'Limit kanałów w planie wyczerpany' : ''}>
                     {atMaxFeeds ? 'Limit kanałów osiągnięty' : 'Utwórz kanał'}
                   </button>
-                  {atMaxFeeds && <div className="mt-8"><Alert type="info">Osiągnięto limit kanałów w Twoim planie.</Alert></div>}
+                  {atMaxFeeds && (
+                    <div style={{ marginTop: 8 }}><Alert type="info">Osiągnięto limit kanałów w Twoim planie.</Alert></div>
+                  )}
                 </form>
 
-                <div className="card p-16">
-                  <h3 className="mt-0">Moje kanały</h3>
+                <div className="card card-pad">
+                  <h3>Moje kanały</h3>
                   {feeds.length === 0 ? (
                     <Alert type="info">Nie masz jeszcze żadnych kanałów.</Alert>
                   ) : (
-                    <ul className="my-feeds-list">
+                    <ul className="feeds-list">
                       {feeds.map(f => (
                         <li
                           key={f.id}
-                          className={`my-feeds-item ${String(activeFeedId) === String(f.id) ? 'active-feed' : ''}`}
+                          className={`feed-row ${String(activeFeedId) === String(f.id) ? 'active-feed' : ''}`}
                         >
-                          <label style={{ cursor: 'pointer' }} className="w-100">
+                          <label className="feed-radio-label">
                             <input
                               type="radio"
                               name="activeFeed"
                               value={f.id}
                               checked={String(activeFeedId) === String(f.id)}
                               onChange={() => setActiveFeedId(f.id)}
-                              style={{ marginRight: 8 }}
                             />
-                            <Link to={`/feeds/${f.id}`} style={{ textDecoration: 'none' }}>
+                            <Link to={`/feeds/${f.id}`} className="feed-link">
                               <strong>{f.title || f.name || `Kanał ${f.id}`}</strong>
                             </Link>
                             {f.description ? <span> — {f.description}</span> : null}
                           </label>
-                          <button onClick={() => deleteFeed(f.id)} className="btn btn-danger">🗑 Usuń</button>
+                          <button onClick={() => deleteFeed(f.id)} className="btn-danger">🗑 Usuń</button>
                         </li>
                       ))}
                     </ul>
@@ -269,13 +272,13 @@ function Dashboard() {
             {/* ───── ODCINKI ───── */}
             {activeTab === 'episodes' && (
               <>
-                <div className="card p-16 mb-12">
-                  <h3 className="mt-0">Dodaj odcinek</h3>
+                <div className="card card-pad" style={{ marginBottom: 16 }}>
+                  <h3>Dodaj odcinek</h3>
                   {feeds.length === 0 ? (
                     <Alert type="info">Najpierw utwórz kanał w zakładce <strong>Kanały</strong>.</Alert>
                   ) : (
                     <>
-                      <div className="mb-12">
+                      <div className="episode-active-feed">
                         <label>Aktywny kanał:&nbsp;</label>
                         <select value={activeFeedId || ''} onChange={(e) => setActiveFeedId(e.target.value)}>
                           {feeds.map(f => (
@@ -285,15 +288,17 @@ function Dashboard() {
                         &nbsp; <Link to={`/feeds/${activeFeedId || feeds[0]?.id}`}>przejdź do szczegółów</Link>
                       </div>
 
-                      <form onSubmit={addEpisode} className="w-100">
+                      <form onSubmit={addEpisode}>
                         <input type="text" name="title" placeholder="Tytuł odcinka" value={newEpisode.title} onChange={handleEpisodeField} />
                         <input type="text" name="description" placeholder="Opis" value={newEpisode.description} onChange={handleEpisodeField} />
                         <input type="file" name="coverFile" accept="image/*" onChange={handleEpisodeField} />
                         <input type="file" name="audioFile" accept="audio/*" onChange={handleEpisodeField} />
-                        <button type="submit" className="btn btn-primary" disabled={atMaxEpisodes} title={atMaxEpisodes ? 'Limit odcinków w tym kanale wyczerpany' : ''}>
+                        <button type="submit" disabled={atMaxEpisodes} title={atMaxEpisodes ? 'Limit odcinków w tym kanale wyczerpany' : ''}>
                           {atMaxEpisodes ? 'Limit odcinków w kanale osiągnięty' : 'Dodaj odcinek'}
                         </button>
-                        {atMaxEpisodes && <div className="mt-8"><Alert type="info">Osiągnięto limit odcinków w tym kanale.</Alert></div>}
+                        {atMaxEpisodes && (
+                          <div style={{ marginTop: 8 }}><Alert type="info">Osiągnięto limit odcinków w tym kanale.</Alert></div>
+                        )}
                       </form>
                     </>
                   )}
@@ -302,25 +307,31 @@ function Dashboard() {
                 <div className="podcast-list">
                   {episodes.map(ep => (
                     <div key={ep.id} className="podcast-item">
-                      <div className="podcast-row">
-                        <div className="podcast-row__left">
+                      <div className="episode-row">
+                        <div className="episode-left">
                           {ep.coverUrl ? (
-                            <img src={ep.coverUrl} alt="" className="podcast-cover" />
+                            <img src={ep.coverUrl} alt="" className="episode-cover" />
                           ) : (
-                            <div className="podcast-cover--placeholder" />
+                            <div className="episode-cover placeholder" />
                           )}
                           <div>
-                            <div style={{ fontWeight: 700 }}>{ep.title}</div>
-                            <div style={{ fontSize: 14, opacity: 0.85 }}>{ep.description}</div>
+                            <div className="episode-title">{ep.title}</div>
+                            <div className="episode-desc">{ep.description}</div>
                             {ep.audioUrl && (
-                              <audio controls className="podcast-player">
+                              <audio controls className="episode-audio">
                                 <source src={ep.audioUrl} />
                               </audio>
                             )}
                           </div>
                         </div>
 
-                        <button onClick={() => deleteEpisode(ep.id)} className="btn btn-danger">🗑 Usuń</button>
+                        <button
+                          onClick={() => deleteEpisode(ep.id)}
+                          className="btn-danger"
+                          style={{ alignSelf: 'flex-start' }}
+                        >
+                          🗑 Usuń
+                        </button>
                       </div>
                     </div>
                   ))}
